@@ -29,5 +29,5 @@
         "default_icon": "images/toolbar-icon.svg"
     },
 
-    "permissions": ["activeTab", "nativeMessaging"]
+    "permissions": ["activeTab", "nativeMessaging", "tabs"]
 }

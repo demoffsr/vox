@@ -1,16 +1,62 @@
-// Background service worker — routes messages between content.js and native handler
+console.log("[Vox bg] Background script loaded!");
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log("[Vox bg] Message received:", request.action, "from:", sender.tab?.id ?? "popup");
+
+    if (request.action === "startTranslation") {
+        // Popup asked to start — forward to active tab's content script
+        handleStartTranslation(request.targetLanguage);
+        sendResponse({ status: "started" });
+        return true;
+    }
+
+    if (request.action === "restorePage") {
+        forwardToActiveTab({ action: "restorePage" });
+        return;
+    }
+
     if (request.action === "translateChunks") {
+        // Content script sent chunks to translate
         translateChunks(request.chunks, request.targetLanguage, sender.tab?.id);
         return true;
     }
+
+    if (request.action === "progressUpdate") {
+        // Forward progress to popup (it might be listening)
+        return;
+    }
 });
+
+async function handleStartTranslation(targetLanguage) {
+    console.log("[Vox bg] Starting translation, language:", targetLanguage);
+    try {
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+        console.log("[Vox bg] Active tab:", tabs[0]?.id, tabs[0]?.url);
+        if (tabs[0]) {
+            await browser.tabs.sendMessage(tabs[0].id, {
+                action: "translatePage",
+                targetLanguage: targetLanguage
+            });
+            console.log("[Vox bg] Sent translatePage to tab");
+        }
+    } catch (e) {
+        console.error("[Vox bg] Error sending to tab:", e);
+    }
+}
+
+async function forwardToActiveTab(message) {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0]) {
+        browser.tabs.sendMessage(tabs[0].id, message);
+    }
+}
 
 async function translateChunks(chunks, targetLanguage, tabId) {
     const total = chunks.length;
+    console.log("[Vox bg] Translating", total, "chunks for tab", tabId);
 
     for (let i = 0; i < total; i++) {
+        console.log("[Vox bg] Chunk", i + 1, "/", total);
         try {
             const response = await browser.runtime.sendNativeMessage(
                 "application.id",
@@ -20,6 +66,7 @@ async function translateChunks(chunks, targetLanguage, tabId) {
                     targetLanguage: targetLanguage || "Auto"
                 }
             );
+            console.log("[Vox bg] Native response:", response);
 
             if (tabId) {
                 browser.tabs.sendMessage(tabId, {
@@ -27,16 +74,17 @@ async function translateChunks(chunks, targetLanguage, tabId) {
                     chunkId: chunks[i].id,
                     translation: response.translation,
                     error: response.error,
-                    progress: { current: i + 1, total: total }
+                    progress: { current: i + 1, total }
                 });
             }
         } catch (error) {
+            console.error("[Vox bg] Native message error:", error);
             if (tabId) {
                 browser.tabs.sendMessage(tabId, {
                     action: "translationResult",
                     chunkId: chunks[i].id,
                     error: error.message || "Translation failed",
-                    progress: { current: i + 1, total: total }
+                    progress: { current: i + 1, total }
                 });
             }
         }

@@ -6,7 +6,10 @@ const VOX_ID_ATTR = "data-vox-id";
 let isTranslated = false;
 let chunkCounter = 0;
 
+console.log("[Vox content] Content script loaded on:", window.location.href);
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log("[Vox content] Received message:", message.action);
     switch (message.action) {
         case "translatePage":
             translatePage(message.targetLanguage);
@@ -25,6 +28,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function translatePage(targetLanguage) {
     const chunks = extractTextChunks();
+    console.log("[Vox content] Extracted chunks:", chunks.length);
     if (chunks.length === 0) return;
 
     isTranslated = true;
@@ -116,6 +120,7 @@ function extractTextChunks() {
 
 function applyTranslation(message) {
     const { chunkId, translation, error, progress } = message;
+    console.log("[Vox content] applyTranslation:", { chunkId, translation: translation?.substring(0, 100), error, progress });
     if (!chunkId) return;
 
     const elements = document.querySelectorAll(`[${VOX_ID_ATTR}="${chunkId}"]`);
