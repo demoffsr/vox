@@ -85,11 +85,7 @@ function collectTextNodes() {
                     if (shouldSkipParent(parent)) return NodeFilter.FILTER_REJECT;
                     parent = parent.parentElement;
                 }
-                // Skip hidden elements
-                const directParent = node.parentElement;
-                if (directParent && directParent.offsetParent === null && directParent.tagName.toLowerCase() !== "body") {
-                    return NodeFilter.FILTER_REJECT;
-                }
+                // Note: NOT skipping offsetParent===null — hidden menus/dropdowns need translation too
                 return NodeFilter.FILTER_ACCEPT;
             }
         }
@@ -233,7 +229,7 @@ function startMutationObserver() {
         if (pendingMutationTimer) clearTimeout(pendingMutationTimer);
         pendingMutationTimer = setTimeout(() => {
             translateNewNodes();
-        }, 2000);
+        }, 500);
     });
 
     mutationObserver.observe(document.body, {
