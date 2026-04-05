@@ -3,6 +3,8 @@ import SwiftUI
 
 final class FloatingPanel: NSPanel {
     private var hostingView: NSHostingView<AnyView>?
+    private var clickOutsideMonitor: Any?
+    var onClickOutside: (() -> Void)?
 
     init(contentView: some View) {
         super.init(
@@ -60,6 +62,30 @@ final class FloatingPanel: NSPanel {
             context.duration = 0.15
             animator().alphaValue = 1
         }
+
+        // Monitor clicks outside the panel
+        startClickOutsideMonitor()
+    }
+
+    private func startClickOutsideMonitor() {
+        stopClickOutsideMonitor()
+        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, self.isVisible else { return }
+            // Check if click is outside our frame
+            let clickLocation = NSEvent.mouseLocation
+            if !self.frame.contains(clickLocation) {
+                DispatchQueue.main.async {
+                    self.onClickOutside?()
+                }
+            }
+        }
+    }
+
+    private func stopClickOutsideMonitor() {
+        if let monitor = clickOutsideMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickOutsideMonitor = nil
+        }
     }
 
     /// Resize panel to match current content size
@@ -76,6 +102,7 @@ final class FloatingPanel: NSPanel {
     }
 
     func dismiss() {
+        stopClickOutsideMonitor()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
             animator().alphaValue = 0
@@ -116,9 +143,11 @@ final class PanelController {
     }
 
     func showPanel() {
-        // Always recreate panel for fresh content
         let cardView = TranslationCardView(viewModel: viewModel)
         panel = FloatingPanel(contentView: cardView)
+        panel?.onClickOutside = { [weak self] in
+            self?.viewModel.dismissPanel()
+        }
         panel?.show(at: viewModel.panelPosition)
 
         // Start polling for size changes while translating

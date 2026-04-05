@@ -35,7 +35,10 @@ struct VoxApp: App {
 
     var body: some Scene {
         MenuBarExtra("Vox", systemImage: "bubble.left.fill") {
-            Button("Translate Clipboard") {
+            Button("Open Vox") {
+                appDelegate.coordinator.showLastOrTranslate()
+            }
+            Button("Translate Selection") {
                 appDelegate.coordinator.translate()
             }
             Divider()

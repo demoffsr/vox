@@ -19,7 +19,7 @@ final class ClaudeAPIService {
         }
     }
 
-    static func buildRequest(text: String, model: ClaudeModel, apiKey: String) throws -> URLRequest {
+    static func buildRequest(text: String, model: ClaudeModel, apiKey: String, targetLanguage: TargetLanguage = .auto) throws -> URLRequest {
         var request = URLRequest(url: Constants.apiURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -30,7 +30,7 @@ final class ClaudeAPIService {
             "model": model.rawValue,
             "max_tokens": 4096,
             "stream": true,
-            "system": Constants.systemPrompt,
+            "system": Constants.systemPrompt(targetLanguage: targetLanguage),
             "messages": [
                 ["role": "user", "content": text]
             ]
@@ -56,12 +56,13 @@ final class ClaudeAPIService {
     func translate(
         text: String,
         model: ClaudeModel,
-        apiKey: String
+        apiKey: String,
+        targetLanguage: TargetLanguage = .auto
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let request = try Self.buildRequest(text: text, model: model, apiKey: apiKey)
+                    let request = try Self.buildRequest(text: text, model: model, apiKey: apiKey, targetLanguage: targetLanguage)
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
 
                     guard let httpResponse = response as? HTTPURLResponse else {

@@ -25,4 +25,12 @@ final class AppCoordinator {
     func translate() {
         viewModel.translateFromClipboard()
     }
+
+    func showLastOrTranslate() {
+        if viewModel.hasLastResult {
+            viewModel.showLastResult()
+        } else {
+            viewModel.translateFromClipboard()
+        }
+    }
 }

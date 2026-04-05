@@ -3,29 +3,27 @@ import SwiftUI
 struct TranslationCardView: View {
     @Bindable var viewModel: TranslationViewModel
     @State private var copied = false
+    @State private var showLanguagePicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Source text (collapsible, subtle)
+            // Language bar at top
+            languageBar
+
+            gradientDivider
+
+            // Source text
             if !viewModel.sourceText.isEmpty {
                 sourceSection
+                gradientDivider
             }
 
-            // Divider with gradient
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [.white.opacity(0), .white.opacity(0.08), .white.opacity(0)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 1)
-
-            // Translation result
+            // Translation
             translationSection
 
-            // Bottom bar
+            gradientDivider
+
+            // Bottom: Copy button
             bottomBar
         }
         .frame(width: 360)
@@ -36,32 +34,99 @@ struct TranslationCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
+    // MARK: - Language Bar
+
+    private var languageBar: some View {
+        HStack(spacing: 8) {
+            // Target language pill
+            Button(action: { showLanguagePicker.toggle() }) {
+                HStack(spacing: 5) {
+                    Text(viewModel.targetLanguage.flag)
+                        .font(.system(size: 12))
+                    Text(viewModel.targetLanguage == .auto ? "Auto" : viewModel.targetLanguage.rawValue)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(.white.opacity(0.08))
+                )
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showLanguagePicker, arrowEdge: .bottom) {
+                languageList
+            }
+
+            if viewModel.isTranslating {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(.white.opacity(0.4))
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var languageList: some View {
+        VStack(spacing: 2) {
+            ForEach(TargetLanguage.allCases) { lang in
+                Button(action: {
+                    showLanguagePicker = false
+                    if lang != viewModel.targetLanguage {
+                        viewModel.retranslate(to: lang)
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Text(lang.flag)
+                            .font(.system(size: 14))
+                        Text(lang.rawValue)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if lang == viewModel.targetLanguage {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .frame(width: 180)
+    }
+
     // MARK: - Source Text
 
     private var sourceSection: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(viewModel.sourceText)
-                .font(.system(size: 12.5, weight: .regular))
-                .foregroundStyle(.white.opacity(0.45))
-                .lineLimit(3)
-                .textSelection(.enabled)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 10)
+        Text(viewModel.sourceText)
+            .font(.system(size: 12.5))
+            .foregroundStyle(.white.opacity(0.4))
+            .lineLimit(3)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
     }
 
     // MARK: - Translation
 
     private var translationSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
             if let error = viewModel.error {
-                // Error state
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 14))
                         .foregroundStyle(.orange.opacity(0.9))
                     Text(error)
                         .font(.system(size: 13, weight: .medium))
@@ -70,7 +135,6 @@ struct TranslationCardView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             } else if viewModel.translatedText.isEmpty && viewModel.isTranslating {
-                // Loading state
                 HStack(spacing: 10) {
                     ProgressView()
                         .controlSize(.small)
@@ -79,14 +143,13 @@ struct TranslationCardView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 20)
             } else {
-                // Translation result
                 ScrollView {
                     Text(viewModel.translatedText)
-                        .font(.system(size: 14, weight: .regular))
+                        .font(.system(size: 14))
                         .foregroundStyle(.white.opacity(0.95))
                         .lineSpacing(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -102,75 +165,54 @@ struct TranslationCardView: View {
     // MARK: - Bottom Bar
 
     private var bottomBar: some View {
-        HStack(spacing: 0) {
-            // Model badge
-            Text(AppSettings.shared.selectedModel.displayName)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.3))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule()
-                        .fill(.white.opacity(0.06))
-                )
-
-            if viewModel.isTranslating {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(.white.opacity(0.4))
-                    .padding(.leading, 8)
-            }
-
+        HStack {
             Spacer()
 
             // Copy button
             Button(action: copyAction) {
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10, weight: .semibold))
-                    if copied {
-                        Text("Copied")
-                            .font(.system(size: 10, weight: .medium))
-                    }
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(copied ? "Copied!" : "Copy")
+                        .font(.system(size: 12, weight: .medium))
                 }
-                .foregroundStyle(copied ? .green : .white.opacity(0.5))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .foregroundStyle(copied ? .green : .white.opacity(0.7))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
                 .background(
                     Capsule()
-                        .fill(.white.opacity(copied ? 0.08 : 0.06))
+                        .fill(copied ? .green.opacity(0.15) : .white.opacity(0.08))
                 )
             }
             .buttonStyle(.plain)
             .disabled(viewModel.translatedText.isEmpty)
             .animation(.easeInOut(duration: 0.2), value: copied)
-
-            // Close button
-            Button(action: { viewModel.dismissPanel() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .frame(width: 22, height: 22)
-                    .background(
-                        Circle()
-                            .fill(.white.opacity(0.06))
-                    )
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.escape, modifiers: [])
-            .padding(.leading, 6)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
 
-    // MARK: - Actions
+    // MARK: - Helpers
+
+    private var gradientDivider: some View {
+        Rectangle()
+            .fill(
+                LinearGradient(
+                    colors: [.white.opacity(0), .white.opacity(0.06), .white.opacity(0)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(height: 1)
+    }
 
     private func copyAction() {
         viewModel.copyTranslation()
         copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        // Auto-dismiss after copy
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             copied = false
+            viewModel.dismissPanel()
         }
     }
 }

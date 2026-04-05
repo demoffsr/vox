@@ -9,7 +9,11 @@ final class TranslationViewModel {
     var error: String?
     var isPanelVisible: Bool = false
     var panelPosition: CGPoint = .zero
+    var targetLanguage: TargetLanguage = .auto
     var onPanelVisibilityChanged: (() -> Void)?
+
+    // Track if we have a previous result to reshow
+    var hasLastResult: Bool { !sourceText.isEmpty }
 
     private let clipboardService = ClipboardService()
     private let apiService = ClaudeAPIService()
@@ -21,11 +25,21 @@ final class TranslationViewModel {
 
         currentTask?.cancel()
         currentTask = Task {
-            // Simulate Cmd+C to grab selected text
             guard let text = await clipboardService.copySelectionAndRead() else {
-                sourceText = ""
-                translatedText = ""
-                error = "Nothing to translate — select some text first"
+                // No selection — show last result if available
+                if hasLastResult {
+                    showPanel()
+                } else {
+                    sourceText = ""
+                    translatedText = ""
+                    error = "Select some text and press ⌘T"
+                    showPanel()
+                }
+                return
+            }
+
+            // If same text as before, just re-show the panel
+            if text == sourceText && !translatedText.isEmpty && error == nil {
                 showPanel()
                 return
             }
@@ -33,7 +47,7 @@ final class TranslationViewModel {
             guard let apiKey = try? keychainHelper.load(), !apiKey.isEmpty else {
                 sourceText = text
                 translatedText = ""
-                error = "No API key configured. Add your key in Settings."
+                error = "No API key — add it in Settings"
                 showPanel()
                 return
             }
@@ -42,20 +56,34 @@ final class TranslationViewModel {
             translatedText = ""
             error = nil
             isTranslating = true
+            targetLanguage = .auto
             showPanel()
 
-            let model = AppSettings.shared.selectedModel
+            await runTranslation(text: text, apiKey: apiKey)
+        }
+    }
 
-            do {
-                let stream = apiService.translate(text: text, model: model, apiKey: apiKey)
-                for try await chunk in stream {
-                    translatedText += chunk
-                }
-                isTranslating = false
-            } catch {
-                self.error = error.localizedDescription
-                isTranslating = false
-            }
+    /// Re-translate same text with a different target language
+    func retranslate(to language: TargetLanguage) {
+        guard !sourceText.isEmpty else { return }
+        guard let apiKey = try? keychainHelper.load(), !apiKey.isEmpty else { return }
+
+        targetLanguage = language
+        translatedText = ""
+        error = nil
+        isTranslating = true
+
+        currentTask?.cancel()
+        currentTask = Task {
+            await runTranslation(text: sourceText, apiKey: apiKey)
+        }
+    }
+
+    /// Show last result without new translation
+    func showLastResult() {
+        if hasLastResult {
+            panelPosition = NSEvent.mouseLocation
+            showPanel()
         }
     }
 
@@ -74,5 +102,24 @@ final class TranslationViewModel {
     private func showPanel() {
         isPanelVisible = true
         onPanelVisibilityChanged?()
+    }
+
+    private func runTranslation(text: String, apiKey: String) async {
+        let model = AppSettings.shared.selectedModel
+        do {
+            let stream = apiService.translate(
+                text: text,
+                model: model,
+                apiKey: apiKey,
+                targetLanguage: targetLanguage
+            )
+            for try await chunk in stream {
+                translatedText += chunk
+            }
+            isTranslating = false
+        } catch {
+            self.error = error.localizedDescription
+            isTranslating = false
+        }
     }
 }
