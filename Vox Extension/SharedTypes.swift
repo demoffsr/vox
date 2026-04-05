@@ -32,16 +32,18 @@ enum Constants {
         }
 
         return """
-        /* prompt redacted */ Translate the following text.
+        /* prompt redacted */
 
         Rules:
         \(langInstruction)
-        - The input may contain multiple segments separated by " ||| "
-        - If the input has " ||| " separators, translate EACH segment and return them separated by " ||| " in the SAME order
-        - You MUST return EXACTLY the same number of " ||| " separated segments as the input
-        - Example: "Home ||| About ||| Contact" → "Главная ||| О нас ||| Контакты"
-        - Translate naturally, preserving tone and idioms
-        - Return ONLY the translation, no explanations
+        - 
+        - 
+        - 
+        - 
+        - Translate naturally, preserving tone and idioms.
+
+        Example input: ["Home", "About us", "Contact"]
+        Example output: ["Главная", "О нас", "Контакты"]
         """
     }
 }

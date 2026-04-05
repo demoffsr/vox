@@ -1,4 +1,4 @@
-// Content script — 1 text node = 1 translation request. No separators, no merging.
+// Content script — batch translation via JSON array format
 if (window._voxLoaded) { /* already loaded */ } else {
 window._voxLoaded = true;
 
@@ -9,120 +9,90 @@ let mutationObserver = null;
 let pendingMutationTimer = null;
 let isApplyingTranslation = false;
 
-// node id -> { node, original }
+// chunk id -> array of text nodes
 const nodeMap = new Map();
 let nodeIdCounter = 0;
 
 console.log("[Vox content] Content script loaded on:", window.location.href);
-
 checkAutoTranslate();
 
-// SPA navigation detection
+// SPA navigation
 let lastUrl = window.location.href;
-const origPushState = history.pushState;
-history.pushState = function(...args) { origPushState.apply(this, args); onUrlChange(); };
-const origReplaceState = history.replaceState;
-history.replaceState = function(...args) { origReplaceState.apply(this, args); onUrlChange(); };
+const origPush = history.pushState;
+history.pushState = function(...a) { origPush.apply(this, a); onUrlChange(); };
+const origReplace = history.replaceState;
+history.replaceState = function(...a) { origReplace.apply(this, a); onUrlChange(); };
 window.addEventListener("popstate", () => onUrlChange());
 
 function onUrlChange() {
-    const newUrl = window.location.href;
-    if (newUrl === lastUrl) return;
-    console.log("[Vox content] URL changed:", newUrl);
-    lastUrl = newUrl;
+    if (window.location.href === lastUrl) return;
+    lastUrl = window.location.href;
     isTranslated = false;
-    stopMutationObserver();
+    stopObserver();
     nodeMap.clear();
     translatedNodes = new WeakSet();
     nodeIdCounter = 0;
     setTimeout(() => checkAutoTranslate(), 800);
 }
 
-browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    switch (message.action) {
-        case "translatePage":
-            translatePage(message.targetLanguage);
-            break;
-        case "restorePage":
-            restorePage();
-            break;
-        case "translationResult":
-            applyTranslation(message);
-            break;
-        case "getStatus":
-            sendResponse({ isTranslated });
-            break;
-    }
+browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === "translatePage") translatePage(msg.targetLanguage);
+    else if (msg.action === "restorePage") restorePage();
+    else if (msg.action === "translationResult") applyTranslation(msg);
+    else if (msg.action === "getStatus") sendResponse({ isTranslated });
 });
 
-// ---- Icon / skip detection ----
+// ---- Skip logic ----
 
-const ICON_CLASSES = /material-icons|fa\b|fa-|fas\b|far\b|fab\b|fal\b|glyphicon|bi\b|bi-/i;
+const ICON_RE = /material-icons|fa\b|fa-|fas\b|far\b|fab\b|fal\b|glyphicon|bi\b|bi-/i;
+const SKIP_TAGS = new Set(["script","style","noscript","svg","code","pre","textarea","input","select","canvas","iframe","video","audio"]);
+const SKIP_ROLES = new Set(["slider","toolbar","menubar","menu","menuitem","menuitemcheckbox","dialog","alertdialog"]);
 
-function isIconNode(node) {
+function shouldSkip(node) {
+    // Check the text node itself
+    const text = node.textContent.trim();
+    if (text.length < 2) return true;
+    if (/^[\d\s.,;:!?%$€£¥+\-*/=()[\]{}@#&|<>]+$/.test(text)) return true;
+
     const parent = node.parentElement;
-    if (!parent) return false;
-    const tag = parent.tagName.toLowerCase();
-    if (tag === "i" || tag === "mat-icon" || tag === "ion-icon") {
-        if (ICON_CLASSES.test(parent.className)) return true;
-        const t = node.textContent.trim();
-        if (t.length < 30 && /^[a-z_]+$/.test(t)) return true;
-    }
-    if (ICON_CLASSES.test(parent.className)) return true;
+    if (!parent) return true;
+
+    // Icon detection
+    const ptag = parent.tagName.toLowerCase();
+    if ((ptag === "i" || ptag === "mat-icon") && (ICON_RE.test(parent.className) || (text.length < 30 && /^[a-z_]+$/.test(text)))) return true;
+    if (ICON_RE.test(parent.className)) return true;
     if (parent.getAttribute("aria-hidden") === "true") return true;
-    try {
-        const font = getComputedStyle(parent).fontFamily.toLowerCase();
-        if (font.includes("material") || font.includes("fontawesome") || font.includes("icon")) return true;
-    } catch (e) {}
+
+    // Walk up ancestors
+    let el = parent;
+    while (el && el !== document.body) {
+        const tag = el.tagName.toLowerCase();
+        if (SKIP_TAGS.has(tag)) return true;
+        const cls = el.className?.toString?.() || "";
+        if (/vjs|video-js|plyr|mejs|jw-/i.test(cls)) return true;
+        const aria = el.getAttribute("aria-label") || "";
+        if (/video player|modal|caption/i.test(aria)) return true;
+        const role = el.getAttribute("role") || "";
+        if (SKIP_ROLES.has(role)) return true;
+        if (tag === "dialog") return true;
+        el = el.parentElement;
+    }
     return false;
 }
-
-const SKIP_TAGS = new Set(["script", "style", "noscript", "svg", "code", "pre", "textarea", "input", "select", "canvas", "iframe", "video", "audio"]);
-const SKIP_ROLES = new Set(["slider", "toolbar", "menubar", "menu", "menuitem", "menuitemcheckbox", "dialog", "alertdialog"]);
-
-function shouldSkipParent(el) {
-    const tag = el.tagName.toLowerCase();
-    if (SKIP_TAGS.has(tag)) return true;
-    const cls = el.className?.toString?.() || "";
-    if (/vjs|video-js|plyr|mejs|jw-|html5-video/i.test(cls)) return true;
-    const ariaLabel = el.getAttribute("aria-label") || "";
-    if (/video player|modal|caption settings|dialog/i.test(ariaLabel)) return true;
-    const role = el.getAttribute("role") || "";
-    if (SKIP_ROLES.has(role)) return true;
-    if (tag === "dialog") return true;
-    return false;
-}
-
-// ---- Collect text nodes ----
 
 function collectTextNodes() {
-    const textNodes = [];
-    const walker = document.createTreeWalker(
-        document.body,
-        NodeFilter.SHOW_TEXT,
-        {
-            acceptNode(node) {
-                const text = node.textContent.trim();
-                if (text.length < 2) return NodeFilter.FILTER_REJECT;
-                if (/^[\d\s.,;:!?%$€£¥+\-*/=()[\]{}@#&|<>]+$/.test(text)) return NodeFilter.FILTER_REJECT;
-                if (isIconNode(node)) return NodeFilter.FILTER_REJECT;
-                let parent = node.parentElement;
-                while (parent && parent !== document.body) {
-                    if (shouldSkipParent(parent)) return NodeFilter.FILTER_REJECT;
-                    parent = parent.parentElement;
-                }
-                return NodeFilter.FILTER_ACCEPT;
-            }
-        }
-    );
+    const nodes = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let n;
     while (n = walker.nextNode()) {
-        if (!translatedNodes.has(n)) textNodes.push(n);
+        if (!translatedNodes.has(n) && !shouldSkip(n)) nodes.push(n);
     }
-    return textNodes;
+    return nodes;
 }
 
-// ---- Translate page ----
+// ---- Translate ----
+
+const BATCH_SIZE = 15; // nodes per API request
 
 function translatePage(targetLanguage) {
     currentLanguage = targetLanguage || "Auto";
@@ -132,26 +102,11 @@ function translatePage(targetLanguage) {
 
     const textNodes = collectTextNodes();
     console.log("[Vox content] Found text nodes:", textNodes.length);
-    if (textNodes.length === 0) return;
+    if (!textNodes.length) return;
     isTranslated = true;
 
-    // Group 5 nodes per chunk with ||| separator
-    const GROUP_SIZE = 5;
-    const chunks = [];
-    for (let i = 0; i < textNodes.length; i += GROUP_SIZE) {
-        const group = textNodes.slice(i, i + GROUP_SIZE);
-        const id = `vox-${nodeIdCounter++}`;
-        const texts = [];
-        for (const node of group) {
-            node._voxOriginal = node.textContent;
-            if (node.parentElement) node.parentElement.style.opacity = "0.5";
-            texts.push(node.textContent.trim());
-        }
-        nodeMap.set(id, group);
-        chunks.push({ id, text: texts.join(" ||| ") });
-    }
-
-    console.log("[Vox content] Sending", chunks.length, "individual nodes for translation");
+    const chunks = buildChunks(textNodes);
+    console.log("[Vox content] Sending", chunks.length, "batches");
     browser.runtime.sendMessage({
         action: "translateChunks",
         chunks: chunks,
@@ -159,56 +114,87 @@ function translatePage(targetLanguage) {
     });
 }
 
-// ---- Apply single translation ----
+function buildChunks(textNodes) {
+    const chunks = [];
+    for (let i = 0; i < textNodes.length; i += BATCH_SIZE) {
+        const batch = textNodes.slice(i, i + BATCH_SIZE);
+        const id = `vox-${nodeIdCounter++}`;
+        const texts = [];
+        for (const node of batch) {
+            node._voxOriginal = node.textContent;
+            if (node.parentElement) node.parentElement.style.opacity = "0.5";
+            texts.push(node.textContent.trim());
+        }
+        nodeMap.set(id, batch);
+        // Send as JSON array string
+        chunks.push({ id, text: JSON.stringify(texts) });
+    }
+    return chunks;
+}
 
-function applyTranslation(message) {
-    const { chunkId, translation, error, progress } = message;
+// ---- Apply ----
 
-    const group = nodeMap.get(chunkId);
-    if (!group || !Array.isArray(group)) return;
+function applyTranslation(msg) {
+    const { chunkId, translation, error, progress } = msg;
+    const batch = nodeMap.get(chunkId);
+    if (!batch || !Array.isArray(batch)) return;
 
     isApplyingTranslation = true;
 
     if (error) {
-        group.forEach(node => {
-            if (node.parentElement) node.parentElement.style.removeProperty("opacity");
-        });
+        batch.forEach(n => { if (n.parentElement) n.parentElement.style.removeProperty("opacity"); });
     } else if (translation) {
-        const parts = translation.split("|||").map(s => s.trim());
-        group.forEach((node, i) => {
-            if (i < parts.length && parts[i]) {
-                node.textContent = parts[i];
+        // Parse JSON array response
+        let parts;
+        try {
+            parts = JSON.parse(translation);
+        } catch {
+            // Fallback: try to extract array from response
+            const match = translation.match(/\[[\s\S]*\]/);
+            if (match) {
+                try { parts = JSON.parse(match[0]); } catch { parts = null; }
             }
-            if (node.parentElement) node.parentElement.style.removeProperty("opacity");
-            translatedNodes.add(node);
-        });
+        }
+
+        if (Array.isArray(parts)) {
+            batch.forEach((node, i) => {
+                if (i < parts.length && parts[i]) {
+                    node.textContent = String(parts[i]);
+                }
+                if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+                translatedNodes.add(node);
+            });
+        } else {
+            // Last resort: single translation for single node
+            if (batch.length === 1) {
+                batch[0].textContent = translation.trim();
+                translatedNodes.add(batch[0]);
+            }
+            batch.forEach(n => { if (n.parentElement) n.parentElement.style.removeProperty("opacity"); });
+        }
     }
 
     isApplyingTranslation = false;
 
     if (progress) {
         browser.runtime.sendMessage({ action: "progressUpdate", ...progress });
-        if (progress.current >= progress.total && !mutationObserver) {
-            startMutationObserver();
-        }
+        if (progress.current >= progress.total && !mutationObserver) startObserver();
     }
 }
 
 // ---- Restore ----
 
 function restorePage() {
-    stopMutationObserver();
+    stopObserver();
     clearDomainAutoTranslate();
-    for (const [id, group] of nodeMap) {
-        const nodes = Array.isArray(group) ? group : [group];
-        nodes.forEach(node => {
-            if (node._voxOriginal) {
-                node.textContent = node._voxOriginal;
-                delete node._voxOriginal;
-            }
+    isApplyingTranslation = true;
+    for (const [, batch] of nodeMap) {
+        (Array.isArray(batch) ? batch : [batch]).forEach(node => {
+            if (node._voxOriginal) { node.textContent = node._voxOriginal; delete node._voxOriginal; }
             if (node.parentElement) node.parentElement.style.removeProperty("opacity");
         });
     }
+    isApplyingTranslation = false;
     nodeMap.clear();
     isTranslated = false;
     clearCache();
@@ -216,90 +202,46 @@ function restorePage() {
 
 // ---- MutationObserver ----
 
-function startMutationObserver() {
+function startObserver() {
     if (mutationObserver) return;
     mutationObserver = new MutationObserver(() => {
         if (!isTranslated || isApplyingTranslation) return;
         if (pendingMutationTimer) clearTimeout(pendingMutationTimer);
-        pendingMutationTimer = setTimeout(() => translateNewNodes(), 500);
+        pendingMutationTimer = setTimeout(() => {
+            const newNodes = collectTextNodes();
+            if (!newNodes.length) return;
+            console.log("[Vox content] New nodes:", newNodes.length);
+            const chunks = buildChunks(newNodes);
+            browser.runtime.sendMessage({ action: "translateChunks", chunks, targetLanguage: currentLanguage });
+        }, 1000);
     });
-    mutationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-    console.log("[Vox content] MutationObserver started");
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+    console.log("[Vox content] Observer started");
 }
 
-function stopMutationObserver() {
+function stopObserver() {
     if (mutationObserver) { mutationObserver.disconnect(); mutationObserver = null; }
     if (pendingMutationTimer) { clearTimeout(pendingMutationTimer); pendingMutationTimer = null; }
 }
 
-function translateNewNodes() {
-    const newNodes = collectTextNodes();
-    if (newNodes.length === 0) return;
-    console.log("[Vox content] Found", newNodes.length, "new nodes");
-
-    const GROUP_SIZE = 5;
-    const chunks = [];
-    for (let i = 0; i < newNodes.length; i += GROUP_SIZE) {
-        const group = newNodes.slice(i, i + GROUP_SIZE);
-        const id = `vox-${nodeIdCounter++}`;
-        const texts = [];
-        for (const node of group) {
-            node._voxOriginal = node.textContent;
-            if (node.parentElement) node.parentElement.style.opacity = "0.5";
-            texts.push(node.textContent.trim());
-        }
-        nodeMap.set(id, group);
-        chunks.push({ id, text: texts.join(" ||| ") });
-    }
-    browser.runtime.sendMessage({
-        action: "translateChunks",
-        chunks: chunks,
-        targetLanguage: currentLanguage
-    });
-}
-
-// ---- Cache ----
+// ---- Cache / Domain ----
 
 const CACHE_PREFIX = "vox-cache-";
 function getCacheKey() { return CACHE_PREFIX + window.location.href; }
-function saveToCache(chunkId, translation) {
-    try {
-        const key = getCacheKey();
-        const cache = JSON.parse(localStorage.getItem(key) || "{}");
-        cache.language = currentLanguage;
-        cache.timestamp = Date.now();
-        cache.chunks = cache.chunks || {};
-        cache.chunks[chunkId] = translation;
-        localStorage.setItem(key, JSON.stringify(cache));
-    } catch (e) {}
-}
-function clearCache() {
-    try { localStorage.removeItem(getCacheKey()); } catch (e) {}
-}
-
-// ---- Auto-translate domain ----
+function clearCache() { try { localStorage.removeItem(getCacheKey()); } catch {} }
 
 const DOMAIN_KEY = "vox-auto-translate-domain";
-function setDomainAutoTranslate(language) {
-    try {
-        localStorage.setItem(DOMAIN_KEY, JSON.stringify({ domain: window.location.hostname, language, timestamp: Date.now() }));
-    } catch (e) {}
+function setDomainAutoTranslate(lang) {
+    try { localStorage.setItem(DOMAIN_KEY, JSON.stringify({ domain: location.hostname, language: lang, timestamp: Date.now() })); } catch {}
 }
-function clearDomainAutoTranslate() {
-    try { localStorage.removeItem(DOMAIN_KEY); } catch (e) {}
-}
+function clearDomainAutoTranslate() { try { localStorage.removeItem(DOMAIN_KEY); } catch {} }
 function checkAutoTranslate() {
     try {
-        const raw = localStorage.getItem(DOMAIN_KEY);
-        if (!raw) return;
-        const data = JSON.parse(raw);
-        if (data.domain === window.location.hostname && Date.now() - data.timestamp < 2 * 60 * 60 * 1000) {
-            console.log("[Vox content] Auto-translating:", data.language);
-            setTimeout(() => translatePage(data.language), 500);
-        } else {
-            localStorage.removeItem(DOMAIN_KEY);
-        }
-    } catch (e) {}
+        const d = JSON.parse(localStorage.getItem(DOMAIN_KEY));
+        if (d?.domain === location.hostname && Date.now() - d.timestamp < 7200000) {
+            setTimeout(() => translatePage(d.language), 500);
+        } else { localStorage.removeItem(DOMAIN_KEY); }
+    } catch {}
 }
 
-} // end if !_voxLoaded
+} // end guard
