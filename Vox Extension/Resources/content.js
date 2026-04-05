@@ -111,17 +111,18 @@ function translatePage(targetLanguage) {
 
     isTranslated = true;
 
-    // Group text nodes into chunks of ~500 words
+    // Group text nodes into chunks (max 20 nodes or 300 words per chunk)
     const chunks = [];
     let currentChunk = [];
     let currentWordCount = 0;
-    const MAX_WORDS = 500;
+    const MAX_WORDS = 300;
+    const MAX_NODES = 20;
 
     for (const textNode of textNodes) {
         const text = textNode.textContent.trim();
         const words = text.split(/\s+/).length;
 
-        if (currentWordCount + words > MAX_WORDS && currentChunk.length > 0) {
+        if ((currentWordCount + words > MAX_WORDS || currentChunk.length >= MAX_NODES) && currentChunk.length > 0) {
             chunks.push(flushChunk(currentChunk));
             currentChunk = [];
             currentWordCount = 0;
@@ -260,11 +261,12 @@ function translateNewNodes() {
     const chunks = [];
     let currentChunk = [];
     let currentWordCount = 0;
-    const MAX_WORDS = 500;
+    const MAX_WORDS = 300;
+    const MAX_NODES = 20;
 
     for (const textNode of newNodes) {
         const words = textNode.textContent.trim().split(/\s+/).length;
-        if (currentWordCount + words > MAX_WORDS && currentChunk.length > 0) {
+        if ((currentWordCount + words > MAX_WORDS || currentChunk.length >= MAX_NODES) && currentChunk.length > 0) {
             chunks.push(flushChunk(currentChunk));
             currentChunk = [];
             currentWordCount = 0;
