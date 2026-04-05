@@ -49,13 +49,15 @@ const SKIP_TAGS = new Set(["script","style","noscript","svg","code","pre","texta
 const SKIP_ROLES = new Set(["slider","toolbar","menubar","menu","menuitem","menuitemcheckbox","dialog","alertdialog"]);
 
 function shouldSkip(node) {
-    // Check the text node itself
     const text = node.textContent.trim();
     if (text.length < 2) return true;
     if (/^[\d\s.,;:!?%$€£¥+\-*/=()[\]{}@#&|<>]+$/.test(text)) return true;
 
     const parent = node.parentElement;
     if (!parent) return true;
+
+    // Skip already translated (marked on parent element)
+    if (parent.hasAttribute("data-vox-done")) return true;
 
     // Icon detection
     const ptag = parent.tagName.toLowerCase();
@@ -161,7 +163,10 @@ function applyTranslation(msg) {
                 if (i < parts.length && parts[i]) {
                     node.textContent = String(parts[i]);
                 }
-                if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+                if (node.parentElement) {
+                    node.parentElement.style.removeProperty("opacity");
+                    node.parentElement.setAttribute("data-vox-done", "1");
+                }
                 translatedNodes.add(node);
             });
         } else {
@@ -191,7 +196,10 @@ function restorePage() {
     for (const [, batch] of nodeMap) {
         (Array.isArray(batch) ? batch : [batch]).forEach(node => {
             if (node._voxOriginal) { node.textContent = node._voxOriginal; delete node._voxOriginal; }
-            if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+            if (node.parentElement) {
+                node.parentElement.style.removeProperty("opacity");
+                node.parentElement.removeAttribute("data-vox-done");
+            }
         });
     }
     isApplyingTranslation = false;
