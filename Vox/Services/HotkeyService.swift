@@ -36,7 +36,9 @@ final class HotkeyService {
 
     private func handleKeyEvent(_ event: NSEvent) {
         if isHotkeyMatch(event) {
-            onTrigger()
+            DispatchQueue.main.async { [weak self] in
+                self?.onTrigger()
+            }
         }
     }
 

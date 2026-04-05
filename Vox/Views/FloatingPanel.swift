@@ -30,6 +30,10 @@ final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func show(at position: CGPoint) {
+        if let hostingView = contentView {
+            let fittingSize = hostingView.fittingSize
+            setContentSize(fittingSize)
+        }
         let origin = NSPoint(
             x: position.x + 10,
             y: position.y - frame.height - 10
@@ -47,8 +51,8 @@ final class FloatingPanel: NSPanel {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
             animator().alphaValue = 0
-        }, completionHandler: {
-            self.orderOut(nil)
+        }, completionHandler: { [weak self] in
+            self?.orderOut(nil)
         })
     }
 

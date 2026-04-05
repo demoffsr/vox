@@ -5,6 +5,10 @@ import Testing
 struct KeychainHelperTests {
     let helper = KeychainHelper(service: "com.vox.test.apikey")
 
+    init() {
+        try? helper.delete() // ensure clean state
+    }
+
     @Test func saveAndLoad() throws {
         try helper.save("sk-test-key-12345")
         let loaded = try helper.load()

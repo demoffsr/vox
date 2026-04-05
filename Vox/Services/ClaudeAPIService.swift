@@ -59,7 +59,7 @@ final class ClaudeAPIService {
         apiKey: String
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     let request = try Self.buildRequest(text: text, model: model, apiKey: apiKey)
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -83,14 +83,20 @@ final class ClaudeAPIService {
                     }
 
                     for try await line in bytes.lines {
+                        try Task.checkCancellation()
                         if let text = Self.parseSSELine(line) {
                             continuation.yield(text)
                         }
                     }
                     continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
                 } catch {
                     continuation.finish(throwing: APIError.networkError(error))
                 }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }

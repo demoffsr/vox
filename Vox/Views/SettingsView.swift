@@ -169,11 +169,18 @@ struct SettingsView: View {
         verificationStatus = .verifying
         Task {
             do {
-                let request = try ClaudeAPIService.buildRequest(
-                    text: "Hello",
-                    model: .haiku,
-                    apiKey: apiKeyInput
-                )
+                var request = URLRequest(url: Constants.apiURL)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "content-type")
+                request.setValue(apiKeyInput, forHTTPHeaderField: "x-api-key")
+                request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+
+                let body: [String: Any] = [
+                    "model": ClaudeModel.haiku.rawValue,
+                    "max_tokens": 1,
+                    "messages": [["role": "user", "content": "Hi"]]
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
                 let (_, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode == 200 {
                     verificationStatus = .success

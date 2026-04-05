@@ -2,6 +2,7 @@ import SwiftUI
 import ServiceManagement
 
 @Observable
+@MainActor
 final class AppSettings {
     static let shared = AppSettings()
 
