@@ -2,108 +2,189 @@ import SwiftUI
 
 struct TranslationCardView: View {
     @Bindable var viewModel: TranslationViewModel
+    @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            headerBar
-            Divider().background(Color.white.opacity(0.1))
-
+            // Source text (collapsible, subtle)
             if !viewModel.sourceText.isEmpty {
                 sourceSection
-                Divider().background(Color.white.opacity(0.1))
             }
 
+            // Divider with gradient
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [.white.opacity(0), .white.opacity(0.08), .white.opacity(0)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(height: 1)
+
+            // Translation result
             translationSection
-            Divider().background(Color.white.opacity(0.1))
-            statusBar
+
+            // Bottom bar
+            bottomBar
         }
-        .frame(width: 320)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.ultraThickMaterial)
+        .frame(width: 360)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThinMaterial)
                 .environment(\.colorScheme, .dark)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
-    }
-
-    private var headerBar: some View {
-        HStack {
-            Button(action: { viewModel.dismissPanel() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.escape, modifiers: [])
-
-            Spacer()
-
-            Button(action: { viewModel.copyTranslation() }) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.translatedText.isEmpty)
-            .help("Copy translation")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
     }
+
+    // MARK: - Source Text
 
     private var sourceSection: some View {
-        ScrollView {
+        HStack(alignment: .top, spacing: 8) {
             Text(viewModel.sourceText)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(.white.opacity(0.45))
+                .lineLimit(3)
                 .textSelection(.enabled)
+
+            Spacer(minLength: 0)
         }
-        .frame(maxHeight: 80)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
     }
+
+    // MARK: - Translation
 
     private var translationSection: some View {
-        ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
             if let error = viewModel.error {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Error state
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.orange.opacity(0.9))
+                    Text(error)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.orange.opacity(0.9))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             } else if viewModel.translatedText.isEmpty && viewModel.isTranslating {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                // Loading state
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white.opacity(0.6))
+                    Text("Translating...")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 20)
             } else {
-                Text(viewModel.translatedText)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                // Translation result
+                ScrollView {
+                    Text(viewModel.translatedText)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(minHeight: 30, maxHeight: 220)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
         }
-        .frame(minHeight: 40, maxHeight: 200)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
-    private var statusBar: some View {
-        HStack {
+    // MARK: - Bottom Bar
+
+    private var bottomBar: some View {
+        HStack(spacing: 0) {
+            // Model badge
+            Text(AppSettings.shared.selectedModel.displayName)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.3))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(.white.opacity(0.06))
+                )
+
             if viewModel.isTranslating {
                 ProgressView()
                     .controlSize(.mini)
-                Text("Translating...")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .tint(.white.opacity(0.4))
+                    .padding(.leading, 8)
             }
+
             Spacer()
-            Text(AppSettings.shared.selectedModel.displayName)
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+
+            // Copy button
+            Button(action: copyAction) {
+                HStack(spacing: 4) {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 10, weight: .semibold))
+                    if copied {
+                        Text("Copied")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                }
+                .foregroundStyle(copied ? .green : .white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(.white.opacity(copied ? 0.08 : 0.06))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.translatedText.isEmpty)
+            .animation(.easeInOut(duration: 0.2), value: copied)
+
+            // Close button
+            Button(action: { viewModel.dismissPanel() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .frame(width: 22, height: 22)
+                    .background(
+                        Circle()
+                            .fill(.white.opacity(0.06))
+                    )
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.escape, modifiers: [])
+            .padding(.leading, 6)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Actions
+
+    private func copyAction() {
+        viewModel.copyTranslation()
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            copied = false
+        }
     }
 }
