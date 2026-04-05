@@ -12,7 +12,7 @@ let currentLanguage = "Auto";
 // Map of vox-id -> array of text nodes
 const nodeMap = new Map();
 // Set of already-translated text nodes (to avoid re-translating)
-const translatedNodes = new WeakSet();
+let translatedNodes = new WeakSet();
 let nodeIdCounter = 0;
 let mutationObserver = null;
 let pendingMutationTimer = null;
@@ -22,6 +22,38 @@ console.log("[Vox content] Content script loaded on:", window.location.href);
 
 // Check if this domain is in auto-translate mode
 checkAutoTranslate();
+
+// Watch for SPA navigation (pushState / replaceState / popstate)
+let lastUrl = window.location.href;
+
+const origPushState = history.pushState;
+history.pushState = function(...args) {
+    origPushState.apply(this, args);
+    onUrlChange();
+};
+const origReplaceState = history.replaceState;
+history.replaceState = function(...args) {
+    origReplaceState.apply(this, args);
+    onUrlChange();
+};
+window.addEventListener("popstate", () => onUrlChange());
+
+function onUrlChange() {
+    const newUrl = window.location.href;
+    if (newUrl === lastUrl) return;
+    console.log("[Vox content] URL changed:", newUrl);
+    lastUrl = newUrl;
+
+    // Reset state for new page
+    isTranslated = false;
+    stopMutationObserver();
+    nodeMap.clear();
+    translatedNodes = new WeakSet();
+    nodeIdCounter = 0;
+
+    // Re-check auto-translate after DOM settles
+    setTimeout(() => checkAutoTranslate(), 800);
+}
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("[Vox content] Received message:", message.action);
