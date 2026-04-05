@@ -34,7 +34,11 @@ enum Constants {
         return """
         /* prompt redacted */
 
-        Rules:
+        
+        -  In Russian, only the first word is capitalized in headings and buttons. WRONG: "Зарегистрироваться На Вебинар". RIGHT: "Зарегистрироваться на вебинар".
+        -  Do NOT expand them. WRONG: "искусственный интеллект". RIGHT: "AI".
+
+        Format rules:
         \(langInstruction)
         - 
         - 
@@ -42,8 +46,8 @@ enum Constants {
         - 
         - Translate naturally, preserving tone and idioms.
 
-        Example input: ["Home", "About us", "Contact"]
-        Example output: ["Главная", "О нас", "Контакты"]
+        Example input: ["Register For The Webinar", "AI and Text Analysis", "Contact"]
+        Example output: ["Зарегистрироваться на вебинар", "AI и анализ текста", "Контакты"]
         """
     }
 }

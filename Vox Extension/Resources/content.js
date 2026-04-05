@@ -89,12 +89,22 @@ function collectTextNodes() {
     while (n = walker.nextNode()) {
         if (!translatedNodes.has(n) && !shouldSkip(n)) nodes.push(n);
     }
+    // Visible nodes first (top-to-bottom), then hidden (dropdowns, carousel slides)
+    nodes.sort((a, b) => {
+        const ar = a.parentElement?.getBoundingClientRect();
+        const br = b.parentElement?.getBoundingClientRect();
+        const aVis = ar && (ar.width > 0 || ar.height > 0);
+        const bVis = br && (br.width > 0 || br.height > 0);
+        if (aVis && !bVis) return -1;
+        if (!aVis && bVis) return 1;
+        return (ar?.top ?? 0) - (br?.top ?? 0);
+    });
     return nodes;
 }
 
 // ---- Translate ----
 
-const BATCH_SIZE = 15; // nodes per API request
+const BATCH_SIZE = 30; // nodes per API request
 
 function translatePage(targetLanguage) {
     currentLanguage = targetLanguage || "Auto";

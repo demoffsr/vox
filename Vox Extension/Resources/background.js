@@ -53,40 +53,54 @@ async function forwardToActiveTab(message) {
 
 async function translateChunks(chunks, targetLanguage, tabId) {
     const total = chunks.length;
-    console.log("[Vox bg] Translating", total, "chunks for tab", tabId);
+    const CONCURRENCY = 5;
+    let completed = 0;
+    console.log("[Vox bg] Translating", total, "chunks for tab", tabId, "(concurrency:", CONCURRENCY + ")");
 
-    for (let i = 0; i < total; i++) {
-        console.log("[Vox bg] Chunk", i + 1, "/", total);
+    async function translateOne(chunk) {
         try {
             const response = await browser.runtime.sendNativeMessage(
                 "application.id",
                 {
                     action: "translate",
-                    text: chunks[i].text,
+                    text: chunk.text,
                     targetLanguage: targetLanguage || "Auto"
                 }
             );
-            console.log("[Vox bg] Native response:", response);
-
+            completed++;
+            console.log("[Vox bg] Chunk done", completed, "/", total);
             if (tabId) {
                 browser.tabs.sendMessage(tabId, {
                     action: "translationResult",
-                    chunkId: chunks[i].id,
+                    chunkId: chunk.id,
                     translation: response.translation,
                     error: response.error,
-                    progress: { current: i + 1, total }
+                    progress: { current: completed, total }
                 });
             }
         } catch (error) {
+            completed++;
             console.error("[Vox bg] Native message error:", error);
             if (tabId) {
                 browser.tabs.sendMessage(tabId, {
                     action: "translationResult",
-                    chunkId: chunks[i].id,
+                    chunkId: chunk.id,
                     error: error.message || "Translation failed",
-                    progress: { current: i + 1, total }
+                    progress: { current: completed, total }
                 });
             }
         }
     }
+
+    // Run with concurrency limit
+    const executing = new Set();
+    for (const chunk of chunks) {
+        const p = translateOne(chunk);
+        executing.add(p);
+        p.then(() => executing.delete(p));
+        if (executing.size >= CONCURRENCY) {
+            await Promise.race(executing);
+        }
+    }
+    await Promise.all(executing);
 }
