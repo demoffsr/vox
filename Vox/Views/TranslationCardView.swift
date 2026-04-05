@@ -29,25 +29,11 @@ struct TranslationCardView: View {
             bottomBar
         }
         .frame(width: 360)
-        .background {
+        .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        }
+                .fill(Color(red: 0.12, green: 0.12, blue: 0.14))
+        )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
-        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
     }
 
     // MARK: - Source Text
