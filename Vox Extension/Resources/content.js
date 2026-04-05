@@ -95,15 +95,23 @@ function isIconNode(node) {
     return false;
 }
 
+const SKIP_TAGS = new Set(["script", "style", "noscript", "svg", "code", "pre", "textarea", "input", "select", "canvas", "iframe", "video", "audio"]);
+const SKIP_ROLES = new Set(["slider", "toolbar", "menubar", "menu", "menuitem", "menuitemcheckbox", "dialog", "alertdialog"]);
+
 function shouldSkipParent(el) {
     const tag = el.tagName.toLowerCase();
-    if (["script", "style", "noscript", "svg", "code", "pre", "textarea", "input", "select", "canvas", "iframe", "video", "audio"].includes(tag)) return true;
-    // Skip video player controls (video.js, plyr, native)
+    if (SKIP_TAGS.has(tag)) return true;
+    // Skip video/media players by class
     const cls = el.className?.toString?.() || "";
-    if (cls.match(/vjs-|video-js|plyr|mejs|jw-/i)) return true;
-    if (el.getAttribute("role") === "slider" || el.getAttribute("role") === "toolbar") return true;
-    // Skip aria-label-only elements (player buttons)
-    if (el.getAttribute("aria-label") && !el.textContent?.trim()) return true;
+    if (/vjs|video-js|plyr|mejs|jw-|html5-video/i.test(cls)) return true;
+    // Skip by aria-label (Video Player, Modal Window, etc.)
+    const ariaLabel = el.getAttribute("aria-label") || "";
+    if (/video player|modal|caption settings|dialog/i.test(ariaLabel)) return true;
+    // Skip interactive roles
+    const role = el.getAttribute("role") || "";
+    if (SKIP_ROLES.has(role)) return true;
+    // Skip dialog elements
+    if (tag === "dialog") return true;
     return false;
 }
 
