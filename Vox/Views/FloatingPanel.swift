@@ -102,11 +102,3 @@ final class PanelController {
         }
     }
 }
-
-// Placeholder until Task 9
-struct TranslationCardView: View {
-    var viewModel: TranslationViewModel
-    var body: some View {
-        Text("Translation Card Placeholder")
-    }
-}
