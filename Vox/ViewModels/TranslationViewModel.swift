@@ -19,32 +19,33 @@ final class TranslationViewModel {
     func translateFromClipboard() {
         panelPosition = NSEvent.mouseLocation
 
-        guard let text = clipboardService.readText() else {
-            sourceText = ""
-            translatedText = ""
-            error = "Nothing to translate — copy some text first"
-            showPanel()
-            return
-        }
-
-        guard let apiKey = try? keychainHelper.load(), !apiKey.isEmpty else {
-            sourceText = text
-            translatedText = ""
-            error = "No API key configured. Add your key in Settings."
-            showPanel()
-            return
-        }
-
-        sourceText = text
-        translatedText = ""
-        error = nil
-        isTranslating = true
-        showPanel()
-
-        let model = AppSettings.shared.selectedModel
-
         currentTask?.cancel()
         currentTask = Task {
+            // Simulate Cmd+C to grab selected text
+            guard let text = await clipboardService.copySelectionAndRead() else {
+                sourceText = ""
+                translatedText = ""
+                error = "Nothing to translate — select some text first"
+                showPanel()
+                return
+            }
+
+            guard let apiKey = try? keychainHelper.load(), !apiKey.isEmpty else {
+                sourceText = text
+                translatedText = ""
+                error = "No API key configured. Add your key in Settings."
+                showPanel()
+                return
+            }
+
+            sourceText = text
+            translatedText = ""
+            error = nil
+            isTranslating = true
+            showPanel()
+
+            let model = AppSettings.shared.selectedModel
+
             do {
                 let stream = apiService.translate(text: text, model: model, apiKey: apiKey)
                 for try await chunk in stream {
