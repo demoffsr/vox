@@ -1,4 +1,6 @@
 // Content script — extracts TEXT NODES, sends for translation, replaces text
+if (window._voxLoaded) { /* already loaded */ } else {
+window._voxLoaded = true;
 
 const VOX_ATTR = "data-vox-original";
 const VOX_ID_ATTR = "data-vox-id";
@@ -318,3 +320,5 @@ function saveToCache(chunkId, translation) {
 function clearCache() {
     try { localStorage.removeItem(getCacheKey()); } catch (e) {}
 }
+
+} // end if !_voxLoaded
