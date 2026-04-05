@@ -14,6 +14,7 @@ const translatedNodes = new WeakSet();
 let nodeIdCounter = 0;
 let mutationObserver = null;
 let pendingMutationTimer = null;
+let isApplyingTranslation = false; // guard against self-triggered mutations
 
 console.log("[Vox content] Content script loaded on:", window.location.href);
 
@@ -137,9 +138,6 @@ function translatePage(targetLanguage) {
     console.log("[Vox content] Created chunks:", chunks.length);
 
     sendChunksForTranslation(chunks);
-
-    // Start watching for new content (carousels, lazy-loaded, SPAs)
-    startMutationObserver();
 }
 
 function sendChunksForTranslation(chunks) {
@@ -191,9 +189,9 @@ function applyTranslation(message) {
 
     if (translation) {
         const parts = translation.split("\n---VOX_SEP---\n");
-        // Fallback: if separator not preserved, split by double newline
         const translatedParts = parts.length === entry.nodes.length ? parts : translation.split("\n\n");
 
+        isApplyingTranslation = true;
         entry.nodes.forEach((node, i) => {
             if (!node._voxOriginal) {
                 node._voxOriginal = node.textContent;
@@ -206,6 +204,7 @@ function applyTranslation(message) {
             }
             translatedNodes.add(node);
         });
+        isApplyingTranslation = false;
 
         // Cache
         saveToCache(chunkId, translation);
@@ -213,6 +212,10 @@ function applyTranslation(message) {
 
     if (progress) {
         browser.runtime.sendMessage({ action: "progressUpdate", ...progress });
+        // Start observer after initial translation completes
+        if (progress.current >= progress.total && !mutationObserver) {
+            startMutationObserver();
+        }
     }
 }
 
@@ -222,13 +225,13 @@ function startMutationObserver() {
     if (mutationObserver) return; // already running
 
     mutationObserver = new MutationObserver((mutations) => {
-        if (!isTranslated) return;
+        if (!isTranslated || isApplyingTranslation) return;
 
         // Debounce: wait for DOM to settle before scanning
         if (pendingMutationTimer) clearTimeout(pendingMutationTimer);
         pendingMutationTimer = setTimeout(() => {
             translateNewNodes();
-        }, 1000); // 1 second debounce
+        }, 2000);
     });
 
     mutationObserver.observe(document.body, {
