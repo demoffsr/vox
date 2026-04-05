@@ -9,7 +9,11 @@ let currentLanguage = "Auto";
 
 // Map of vox-id -> array of text nodes
 const nodeMap = new Map();
+// Set of already-translated text nodes (to avoid re-translating)
+const translatedNodes = new WeakSet();
 let nodeIdCounter = 0;
+let mutationObserver = null;
+let pendingMutationTimer = null;
 
 console.log("[Vox content] Content script loaded on:", window.location.href);
 
@@ -90,6 +94,8 @@ function collectTextNodes() {
 
     let n;
     while (n = walker.nextNode()) {
+        // Skip already translated nodes
+        if (translatedNodes.has(n)) continue;
         textNodes.push(n);
     }
     return textNodes;
@@ -130,6 +136,15 @@ function translatePage(targetLanguage) {
 
     console.log("[Vox content] Created chunks:", chunks.length);
 
+    sendChunksForTranslation(chunks);
+
+    // Start watching for new content (carousels, lazy-loaded, SPAs)
+    startMutationObserver();
+}
+
+function sendChunksForTranslation(chunks) {
+    if (chunks.length === 0) return;
+    console.log("[Vox content] Sending", chunks.length, "chunks for translation");
     browser.runtime.sendMessage({
         action: "translateChunks",
         chunks: chunks,
@@ -180,18 +195,16 @@ function applyTranslation(message) {
         const translatedParts = parts.length === entry.nodes.length ? parts : translation.split("\n\n");
 
         entry.nodes.forEach((node, i) => {
-            // Save original
             if (!node._voxOriginal) {
                 node._voxOriginal = node.textContent;
             }
-            // Replace with translation
             if (i < translatedParts.length && translatedParts[i].trim()) {
                 node.textContent = translatedParts[i].trim();
             }
-            // Restore opacity
             if (node.parentElement) {
                 node.parentElement.style.removeProperty("opacity");
             }
+            translatedNodes.add(node);
         });
 
         // Cache
@@ -203,7 +216,70 @@ function applyTranslation(message) {
     }
 }
 
+// MARK: - MutationObserver (auto-translate new content)
+
+function startMutationObserver() {
+    if (mutationObserver) return; // already running
+
+    mutationObserver = new MutationObserver((mutations) => {
+        if (!isTranslated) return;
+
+        // Debounce: wait for DOM to settle before scanning
+        if (pendingMutationTimer) clearTimeout(pendingMutationTimer);
+        pendingMutationTimer = setTimeout(() => {
+            translateNewNodes();
+        }, 1000); // 1 second debounce
+    });
+
+    mutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+    console.log("[Vox content] MutationObserver started — watching for new content");
+}
+
+function stopMutationObserver() {
+    if (mutationObserver) {
+        mutationObserver.disconnect();
+        mutationObserver = null;
+    }
+    if (pendingMutationTimer) {
+        clearTimeout(pendingMutationTimer);
+        pendingMutationTimer = null;
+    }
+}
+
+function translateNewNodes() {
+    const newNodes = collectTextNodes(); // already skips translatedNodes
+    if (newNodes.length === 0) return;
+
+    console.log("[Vox content] Found", newNodes.length, "new text nodes to translate");
+
+    const chunks = [];
+    let currentChunk = [];
+    let currentWordCount = 0;
+    const MAX_WORDS = 500;
+
+    for (const textNode of newNodes) {
+        const words = textNode.textContent.trim().split(/\s+/).length;
+        if (currentWordCount + words > MAX_WORDS && currentChunk.length > 0) {
+            chunks.push(flushChunk(currentChunk));
+            currentChunk = [];
+            currentWordCount = 0;
+        }
+        currentChunk.push(textNode);
+        currentWordCount += words;
+    }
+    if (currentChunk.length > 0) {
+        chunks.push(flushChunk(currentChunk));
+    }
+
+    sendChunksForTranslation(chunks);
+}
+
 function restorePage() {
+    stopMutationObserver();
     for (const [id, entry] of nodeMap) {
         entry.nodes.forEach((node, i) => {
             if (node._voxOriginal) {
