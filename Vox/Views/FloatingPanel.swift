@@ -2,10 +2,12 @@ import AppKit
 import SwiftUI
 
 final class FloatingPanel: NSPanel {
+    private var hostingView: NSHostingView<AnyView>?
+
     init(contentView: some View) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
-            styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
+            contentRect: .zero,
+            styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
         )
@@ -13,7 +15,7 @@ final class FloatingPanel: NSPanel {
         isFloatingPanel = true
         level = .floating
         isOpaque = false
-        backgroundColor = .clear
+        backgroundColor = NSColor.clear
         hasShadow = false
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
@@ -23,20 +25,30 @@ final class FloatingPanel: NSPanel {
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
 
-        let hostingView = NSHostingView(rootView: contentView)
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = .clear
-        self.contentView = hostingView
+        // Wrap in AnyView for type erasure
+        let hosting = NSHostingView(rootView: AnyView(contentView))
+        hosting.wantsLayer = true
+        hosting.layer?.backgroundColor = CGColor.clear
+
+        // Make the hosting view's background fully transparent
+        if let layer = hosting.layer {
+            layer.isOpaque = false
+        }
+
+        self.contentView = hosting
+        self.hostingView = hosting
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     func show(at position: CGPoint) {
-        if let hostingView = contentView {
-            let fittingSize = hostingView.fittingSize
-            setContentSize(fittingSize)
+        // Size to fit content
+        if let hosting = hostingView {
+            let size = hosting.fittingSize
+            setContentSize(size)
         }
+
         let origin = NSPoint(
             x: position.x + 10,
             y: position.y - frame.height - 10
@@ -48,6 +60,19 @@ final class FloatingPanel: NSPanel {
             context.duration = 0.15
             animator().alphaValue = 1
         }
+    }
+
+    /// Resize panel to match current content size
+    func resizeToFit() {
+        guard let hosting = hostingView else { return }
+        let newSize = hosting.fittingSize
+        let currentFrame = frame
+        // Keep top-left corner pinned (grow downward in screen coords = shrink y origin)
+        let newOrigin = NSPoint(
+            x: currentFrame.origin.x,
+            y: currentFrame.maxY - newSize.height
+        )
+        setFrame(NSRect(origin: newOrigin, size: newSize), display: true, animate: true)
     }
 
     func dismiss() {
@@ -84,20 +109,24 @@ final class FloatingPanel: NSPanel {
 final class PanelController {
     private var panel: FloatingPanel?
     private let viewModel: TranslationViewModel
+    private var resizeTimer: Timer?
 
     init(viewModel: TranslationViewModel) {
         self.viewModel = viewModel
     }
 
     func showPanel() {
-        if panel == nil {
-            let cardView = TranslationCardView(viewModel: viewModel)
-            panel = FloatingPanel(contentView: cardView)
-        }
+        // Always recreate panel for fresh content
+        let cardView = TranslationCardView(viewModel: viewModel)
+        panel = FloatingPanel(contentView: cardView)
         panel?.show(at: viewModel.panelPosition)
+
+        // Start polling for size changes while translating
+        startResizePolling()
     }
 
     func hidePanel() {
+        stopResizePolling()
         panel?.dismiss()
     }
 
@@ -107,5 +136,25 @@ final class PanelController {
         } else {
             hidePanel()
         }
+    }
+
+    private func startResizePolling() {
+        resizeTimer?.invalidate()
+        resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.panel?.resizeToFit()
+                // Stop polling when translation is done
+                if self?.viewModel.isTranslating == false {
+                    self?.stopResizePolling()
+                    // One final resize
+                    self?.panel?.resizeToFit()
+                }
+            }
+        }
+    }
+
+    private func stopResizePolling() {
+        resizeTimer?.invalidate()
+        resizeTimer = nil
     }
 }
