@@ -97,7 +97,14 @@ function isIconNode(node) {
 
 function shouldSkipParent(el) {
     const tag = el.tagName.toLowerCase();
-    return ["script", "style", "noscript", "svg", "code", "pre", "textarea", "input", "select", "canvas", "iframe", "video", "audio"].includes(tag);
+    if (["script", "style", "noscript", "svg", "code", "pre", "textarea", "input", "select", "canvas", "iframe", "video", "audio"].includes(tag)) return true;
+    // Skip video player controls (video.js, plyr, native)
+    const cls = el.className?.toString?.() || "";
+    if (cls.match(/vjs-|video-js|plyr|mejs|jw-/i)) return true;
+    if (el.getAttribute("role") === "slider" || el.getAttribute("role") === "toolbar") return true;
+    // Skip aria-label-only elements (player buttons)
+    if (el.getAttribute("aria-label") && !el.textContent?.trim()) return true;
+    return false;
 }
 
 function collectTextNodes() {
@@ -225,16 +232,25 @@ function applyTranslation(message) {
     }
 
     if (translation) {
-        const parts = translation.split("\n---VOX_SEP---\n");
-        const translatedParts = parts.length === entry.nodes.length ? parts : translation.split("\n\n");
+        let parts = translation.split("\n---VOX_SEP---\n");
+
+        // Fallback strategies if separator count doesn't match nodes
+        if (parts.length !== entry.nodes.length) {
+            // Try without newlines around separator
+            parts = translation.split("---VOX_SEP---");
+        }
+        if (parts.length !== entry.nodes.length) {
+            // Last resort: split by double newline
+            parts = translation.split("\n\n");
+        }
 
         isApplyingTranslation = true;
         entry.nodes.forEach((node, i) => {
             if (!node._voxOriginal) {
                 node._voxOriginal = node.textContent;
             }
-            if (i < translatedParts.length && translatedParts[i].trim()) {
-                node.textContent = translatedParts[i].trim();
+            if (i < parts.length && parts[i].trim()) {
+                node.textContent = parts[i].trim().replace(/---VOX_SEP---/g, "");
             }
             if (node.parentElement) {
                 node.parentElement.style.removeProperty("opacity");
