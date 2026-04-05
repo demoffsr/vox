@@ -20,6 +20,9 @@ let isApplyingTranslation = false; // guard against self-triggered mutations
 
 console.log("[Vox content] Content script loaded on:", window.location.href);
 
+// Check if this domain is in auto-translate mode
+checkAutoTranslate();
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("[Vox content] Received message:", message.action);
     switch (message.action) {
@@ -104,6 +107,9 @@ function translatePage(targetLanguage) {
     currentLanguage = targetLanguage || "Auto";
     nodeMap.clear();
     nodeIdCounter = 0;
+
+    // Remember: auto-translate this domain
+    setDomainAutoTranslate(currentLanguage);
 
     const textNodes = collectTextNodes();
     console.log("[Vox content] Found text nodes:", textNodes.length);
@@ -283,6 +289,7 @@ function translateNewNodes() {
 
 function restorePage() {
     stopMutationObserver();
+    clearDomainAutoTranslate();
     for (const [id, entry] of nodeMap) {
         entry.nodes.forEach((node, i) => {
             if (node._voxOriginal) {
@@ -317,6 +324,39 @@ function saveToCache(chunkId, translation) {
 
 function clearCache() {
     try { localStorage.removeItem(getCacheKey()); } catch (e) {}
+}
+
+// MARK: - Auto-translate domain
+
+const DOMAIN_KEY = "vox-auto-translate-domain";
+
+function setDomainAutoTranslate(language) {
+    try {
+        const data = { domain: window.location.hostname, language, timestamp: Date.now() };
+        localStorage.setItem(DOMAIN_KEY, JSON.stringify(data));
+    } catch (e) {}
+}
+
+function clearDomainAutoTranslate() {
+    try { localStorage.removeItem(DOMAIN_KEY); } catch (e) {}
+}
+
+function checkAutoTranslate() {
+    try {
+        const raw = localStorage.getItem(DOMAIN_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        // Same domain and within 2 hours
+        if (data.domain === window.location.hostname && Date.now() - data.timestamp < 2 * 60 * 60 * 1000) {
+            console.log("[Vox content] Auto-translating (domain mode):", data.language);
+            // Small delay to let page finish rendering
+            setTimeout(() => {
+                translatePage(data.language);
+            }, 500);
+        } else {
+            localStorage.removeItem(DOMAIN_KEY);
+        }
+    } catch (e) {}
 }
 
 } // end if !_voxLoaded
