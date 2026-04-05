@@ -23,7 +23,10 @@ final class FloatingPanel: NSPanel {
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
 
-        self.contentView = NSHostingView(rootView: contentView)
+        let hostingView = NSHostingView(rootView: contentView)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = .clear
+        self.contentView = hostingView
     }
 
     override var canBecomeKey: Bool { true }
