@@ -5,6 +5,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = AppCoordinator()
     private var settingsWindow: NSWindow?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Register this object as the Services provider
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
+    }
+
+    /// Called by macOS Services menu — "Translate with Vox"
+    @objc func translateService(
+        _ pboard: NSPasteboard,
+        userData: String,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        guard let text = pboard.string(forType: .string), !text.isEmpty else {
+            error.pointee = "No text provided" as NSString
+            return
+        }
+        coordinator.translateText(text)
+    }
+
     func openSettings() {
         if let window = settingsWindow, window.isVisible {
             window.makeKeyAndOrderFront(nil)

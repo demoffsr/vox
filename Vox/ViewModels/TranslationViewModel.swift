@@ -79,6 +79,31 @@ final class TranslationViewModel {
         }
     }
 
+    /// Translate text directly (from Services menu — no clipboard needed)
+    func translateDirectly(text: String) {
+        panelPosition = NSEvent.mouseLocation
+
+        guard let apiKey = try? keychainHelper.load(), !apiKey.isEmpty else {
+            sourceText = text
+            translatedText = ""
+            error = "No API key — add it in Settings"
+            showPanel()
+            return
+        }
+
+        sourceText = text
+        translatedText = ""
+        error = nil
+        isTranslating = true
+        targetLanguage = .auto
+        showPanel()
+
+        currentTask?.cancel()
+        currentTask = Task {
+            await runTranslation(text: text, apiKey: apiKey)
+        }
+    }
+
     /// Show last result without new translation
     func showLastResult() {
         if hasLastResult {

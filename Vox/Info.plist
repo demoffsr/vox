@@ -4,5 +4,23 @@
 <dict>
     <key>LSUIElement</key>
     <true/>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Translate with Vox</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>translateService</string>
+            <key>NSPortName</key>
+            <string>Vox</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

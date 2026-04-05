@@ -33,4 +33,9 @@ final class AppCoordinator {
             viewModel.translateFromClipboard()
         }
     }
+
+    /// Translate text directly (from Services menu)
+    func translateText(_ text: String) {
+        viewModel.translateDirectly(text: text)
+    }
 }
