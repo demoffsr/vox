@@ -135,15 +135,20 @@ function translatePage(targetLanguage) {
     if (textNodes.length === 0) return;
     isTranslated = true;
 
-    // 1 node = 1 chunk. Simple, reliable, no separator issues.
+    // Group 5 nodes per chunk with ||| separator
+    const GROUP_SIZE = 5;
     const chunks = [];
-    for (const node of textNodes) {
+    for (let i = 0; i < textNodes.length; i += GROUP_SIZE) {
+        const group = textNodes.slice(i, i + GROUP_SIZE);
         const id = `vox-${nodeIdCounter++}`;
-        const text = node.textContent.trim();
-        node._voxOriginal = node.textContent;
-        if (node.parentElement) node.parentElement.style.opacity = "0.5";
-        nodeMap.set(id, node);
-        chunks.push({ id, text });
+        const texts = [];
+        for (const node of group) {
+            node._voxOriginal = node.textContent;
+            if (node.parentElement) node.parentElement.style.opacity = "0.5";
+            texts.push(node.textContent.trim());
+        }
+        nodeMap.set(id, group);
+        chunks.push({ id, text: texts.join(" ||| ") });
     }
 
     console.log("[Vox content] Sending", chunks.length, "individual nodes for translation");
@@ -159,17 +164,24 @@ function translatePage(targetLanguage) {
 function applyTranslation(message) {
     const { chunkId, translation, error, progress } = message;
 
-    const node = nodeMap.get(chunkId);
-    if (!node) return;
+    const group = nodeMap.get(chunkId);
+    if (!group || !Array.isArray(group)) return;
 
     isApplyingTranslation = true;
 
     if (error) {
-        if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+        group.forEach(node => {
+            if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+        });
     } else if (translation) {
-        node.textContent = translation.trim();
-        if (node.parentElement) node.parentElement.style.removeProperty("opacity");
-        translatedNodes.add(node);
+        const parts = translation.split("|||").map(s => s.trim());
+        group.forEach((node, i) => {
+            if (i < parts.length && parts[i]) {
+                node.textContent = parts[i];
+            }
+            if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+            translatedNodes.add(node);
+        });
     }
 
     isApplyingTranslation = false;
@@ -187,12 +199,15 @@ function applyTranslation(message) {
 function restorePage() {
     stopMutationObserver();
     clearDomainAutoTranslate();
-    for (const [id, node] of nodeMap) {
-        if (node._voxOriginal) {
-            node.textContent = node._voxOriginal;
-            delete node._voxOriginal;
-        }
-        if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+    for (const [id, group] of nodeMap) {
+        const nodes = Array.isArray(group) ? group : [group];
+        nodes.forEach(node => {
+            if (node._voxOriginal) {
+                node.textContent = node._voxOriginal;
+                delete node._voxOriginal;
+            }
+            if (node.parentElement) node.parentElement.style.removeProperty("opacity");
+        });
     }
     nodeMap.clear();
     isTranslated = false;
@@ -222,13 +237,19 @@ function translateNewNodes() {
     if (newNodes.length === 0) return;
     console.log("[Vox content] Found", newNodes.length, "new nodes");
 
+    const GROUP_SIZE = 5;
     const chunks = [];
-    for (const node of newNodes) {
+    for (let i = 0; i < newNodes.length; i += GROUP_SIZE) {
+        const group = newNodes.slice(i, i + GROUP_SIZE);
         const id = `vox-${nodeIdCounter++}`;
-        node._voxOriginal = node.textContent;
-        if (node.parentElement) node.parentElement.style.opacity = "0.5";
-        nodeMap.set(id, node);
-        chunks.push({ id, text: node.textContent.trim() });
+        const texts = [];
+        for (const node of group) {
+            node._voxOriginal = node.textContent;
+            if (node.parentElement) node.parentElement.style.opacity = "0.5";
+            texts.push(node.textContent.trim());
+        }
+        nodeMap.set(id, group);
+        chunks.push({ id, text: texts.join(" ||| ") });
     }
     browser.runtime.sendMessage({
         action: "translateChunks",
