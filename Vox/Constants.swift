@@ -6,6 +6,7 @@ enum Constants {
     static let apiURL = URL(string: "https://api.anthropic.com/v1/messages")!
     static let apiVersion = "2023-06-01"
     static let keychainServiceName = "com.vox.apikey"
+    static let appGroupID = "group.com.Vox.Vox"
 
     static func systemPrompt(targetLanguage: TargetLanguage) -> String {
         let langInstruction: String

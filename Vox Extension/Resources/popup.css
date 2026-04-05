@@ -1,0 +1,56 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    width: 240px;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: rgb(30, 30, 34);
+    color: rgba(255, 255, 255, 0.9);
+    -webkit-font-smoothing: antialiased;
+}
+
+.container { padding: 14px; }
+
+.header { text-align: center; margin-bottom: 14px; }
+.logo { font-size: 16px; font-weight: 700; }
+.logo span { margin-left: 4px; }
+
+.controls { display: flex; flex-direction: column; gap: 8px; }
+
+.language-row { display: flex; align-items: center; justify-content: space-between; }
+.language-row label { font-size: 12px; color: rgba(255,255,255,0.5); font-weight: 500; }
+.language-row select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    color: rgba(255,255,255,0.8);
+    padding: 5px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 16px; border: none; border-radius: 10px;
+    font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.primary { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; }
+.btn.secondary {
+    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.7);
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.progress { margin-top: 10px; }
+.progress-bar { height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); width: 0%; transition: width 0.3s; }
+.progress-text { display: block; margin-top: 5px; font-size: 11px; color: rgba(255,255,255,0.4); text-align: center; }
+
+.error {
+    margin-top: 8px; padding: 8px; background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.2); border-radius: 8px;
+    font-size: 12px; color: rgba(239,68,68,0.9);
+}

@@ -6,7 +6,18 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D8D503E02F82A872006BD6A9 /* Vox Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		D8D503DE2F82A872006BD6A9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D8F4E9F92F8289C0006040E2 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D8D503C92F82A872006BD6A9;
+			remoteInfo = "Vox Extension";
+		};
 		D8F4EB0F2F8289C0006040E2 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = D8F4E9F92F8289C0006040E2 /* Project object */;
@@ -16,12 +27,48 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		D8D503E12F82A872006BD6A9 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D8D503E02F82A872006BD6A9 /* Vox Extension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "Vox Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D8F4EA012F8289C0006040E2 /* Vox.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vox.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D8F4EB012F8289C0006040E2 /* VoxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		D8D503E42F82A872006BD6A9 /* Exceptions for "Vox Extension" folder in "Vox Extension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = D8D503C92F82A872006BD6A9 /* Vox Extension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		D8D503CB2F82A872006BD6A9 /* Vox Extension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D8D503E42F82A872006BD6A9 /* Exceptions for "Vox Extension" folder in "Vox Extension" target */,
+			);
+			explicitFolders = (
+				Resources/_locales,
+			);
+			path = "Vox Extension";
+			sourceTree = "<group>";
+		};
 		D8F4EA032F8289C0006040E2 /* Vox */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Vox;
@@ -35,6 +82,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		D8D503C72F82A872006BD6A9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D8F4E9FE2F8289C0006040E2 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -57,6 +111,7 @@
 			children = (
 				D8F4EA032F8289C0006040E2 /* Vox */,
 				D8F4EB032F8289C0006040E2 /* VoxTests */,
+				D8D503CB2F82A872006BD6A9 /* Vox Extension */,
 				D8F4EA022F8289C0006040E2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -66,6 +121,7 @@
 			children = (
 				D8F4EA012F8289C0006040E2 /* Vox.app */,
 				D8F4EB012F8289C0006040E2 /* VoxTests.xctest */,
+				D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -73,6 +129,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		D8D503C92F82A872006BD6A9 /* Vox Extension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D8D503E52F82A872006BD6A9 /* Build configuration list for PBXNativeTarget "Vox Extension" */;
+			buildPhases = (
+				D8D503C62F82A872006BD6A9 /* Sources */,
+				D8D503C72F82A872006BD6A9 /* Frameworks */,
+				D8D503C82F82A872006BD6A9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D8D503CB2F82A872006BD6A9 /* Vox Extension */,
+			);
+			name = "Vox Extension";
+			packageProductDependencies = (
+			);
+			productName = "Vox Extension";
+			productReference = D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		D8F4EA002F8289C0006040E2 /* Vox */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = D8F4EA0C2F8289C2006040E2 /* Build configuration list for PBXNativeTarget "Vox" */;
@@ -80,10 +158,12 @@
 				D8F4E9FD2F8289C0006040E2 /* Sources */,
 				D8F4E9FE2F8289C0006040E2 /* Frameworks */,
 				D8F4E9FF2F8289C0006040E2 /* Resources */,
+				D8D503E12F82A872006BD6A9 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D8D503DF2F82A872006BD6A9 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				D8F4EA032F8289C0006040E2 /* Vox */,
@@ -127,6 +207,9 @@
 				LastSwiftUpdateCheck = 2610;
 				LastUpgradeCheck = 2610;
 				TargetAttributes = {
+					D8D503C92F82A872006BD6A9 = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
 					D8F4EA002F8289C0006040E2 = {
 						CreatedOnToolsVersion = 26.1.1;
 					};
@@ -152,11 +235,19 @@
 			targets = (
 				D8F4EA002F8289C0006040E2 /* Vox */,
 				D8F4EB002F8289C0006040E2 /* VoxTests */,
+				D8D503C92F82A872006BD6A9 /* Vox Extension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		D8D503C82F82A872006BD6A9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D8F4E9FF2F8289C0006040E2 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -167,6 +258,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		D8D503C62F82A872006BD6A9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D8F4E9FD2F8289C0006040E2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -184,6 +282,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		D8D503DF2F82A872006BD6A9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D8D503C92F82A872006BD6A9 /* Vox Extension */;
+			targetProxy = D8D503DE2F82A872006BD6A9 /* PBXContainerItemProxy */;
+		};
 		D8F4EB102F8289C0006040E2 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = D8F4EA002F8289C0006040E2 /* Vox */;
@@ -192,6 +295,76 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		D8D503E22F82A872006BD6A9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4LZ84Z78M7;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Vox Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Vox Extension";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.Vox.Vox.Vox-Extension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D8D503E32F82A872006BD6A9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4LZ84Z78M7;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Vox Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Vox Extension";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.Vox.Vox.Vox-Extension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		D8F4EA0A2F8289C2006040E2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -429,6 +602,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		D8D503E52F82A872006BD6A9 /* Build configuration list for PBXNativeTarget "Vox Extension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D8D503E22F82A872006BD6A9 /* Debug */,
+				D8D503E32F82A872006BD6A9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		D8F4E9FC2F8289C0006040E2 /* Build configuration list for PBXProject "Vox" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
