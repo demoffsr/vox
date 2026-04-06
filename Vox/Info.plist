@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Vox uses speech recognition to generate live subtitles for video audio.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Vox captures system audio to generate live subtitles.</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSServices</key>

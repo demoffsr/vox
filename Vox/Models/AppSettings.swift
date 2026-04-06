@@ -35,4 +35,19 @@ final class AppSettings {
             }
         }
     }
+
+    var subtitleLanguage: SubtitleLanguage {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "subtitleLanguage") ?? SubtitleLanguage.english.rawValue
+            return SubtitleLanguage(rawValue: raw) ?? .english
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "subtitleLanguage")
+        }
+    }
+
+    var showNativeSubtitles: Bool {
+        get { UserDefaults.standard.object(forKey: "showNativeSubtitles") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "showNativeSubtitles") }
+    }
 }

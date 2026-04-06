@@ -60,6 +60,44 @@ enum ClaudeModel: String, CaseIterable, Identifiable {
     }
 }
 
+enum SubtitleLanguage: String, CaseIterable, Identifiable {
+    case english = "en-US"
+    case russian = "ru-RU"
+    case spanish = "es-ES"
+    case french = "fr-FR"
+    case german = "de-DE"
+    case chinese = "zh-CN"
+    case japanese = "ja-JP"
+
+    var id: String { rawValue }
+
+    var locale: Locale { Locale(identifier: rawValue) }
+
+    var displayName: String {
+        switch self {
+        case .english: return "English"
+        case .russian: return "Russian"
+        case .spanish: return "Spanish"
+        case .french: return "French"
+        case .german: return "German"
+        case .chinese: return "Chinese"
+        case .japanese: return "Japanese"
+        }
+    }
+
+    var flag: String {
+        switch self {
+        case .english: return "🇬🇧"
+        case .russian: return "🇷🇺"
+        case .spanish: return "🇪🇸"
+        case .french: return "🇫🇷"
+        case .german: return "🇩🇪"
+        case .chinese: return "🇨🇳"
+        case .japanese: return "🇯🇵"
+        }
+    }
+}
+
 enum TargetLanguage: String, CaseIterable, Identifiable {
     case auto = "Auto"
     case english = "English"

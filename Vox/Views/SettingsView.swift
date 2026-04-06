@@ -25,6 +25,14 @@ struct SettingsView: View {
         Binding(get: { settings.selectedModel }, set: { settings.selectedModel = $0 })
     }
 
+    private var subtitleLanguageBinding: Binding<SubtitleLanguage> {
+        Binding(get: { settings.subtitleLanguage }, set: { settings.subtitleLanguage = $0 })
+    }
+
+    private var showNativeSubtitlesBinding: Binding<Bool> {
+        Binding(get: { settings.showNativeSubtitles }, set: { settings.showNativeSubtitles = $0 })
+    }
+
     var body: some View {
         ZStack {
             // Background gradient
@@ -47,6 +55,7 @@ struct SettingsView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
                         generalSection
+                        subtitlesSection
                         translationSection
                         apiSection
                         aboutSection
@@ -113,6 +122,38 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .tint(.blue)
             }
+        }
+    }
+
+    // MARK: - Subtitles
+
+    private var subtitlesSection: some View {
+        card {
+            row(icon: "captions.bubble", title: "Language") {
+                Picker("", selection: subtitleLanguageBinding) {
+                    ForEach(SubtitleLanguage.allCases) { lang in
+                        Text("\(lang.flag) \(lang.displayName)").tag(lang)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 145)
+                .tint(.white.opacity(0.7))
+            }
+
+            divider
+
+            row(icon: "rectangle.bottomhalf.inset.filled", title: "Overlay panel") {
+                Toggle("", isOn: showNativeSubtitlesBinding)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(.blue)
+            }
+
+            Text("Show floating subtitles over any app. Safari overlay always active.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.25))
+                .padding(.top, 4)
+                .padding(.leading, 28)
         }
     }
 

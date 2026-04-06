@@ -85,7 +85,16 @@ struct VoxApp: App {
                     if appDelegate.subtitleService.isRunning {
                         await appDelegate.subtitleService.stop()
                     } else {
+                        let settings = AppSettings.shared
+                        appDelegate.subtitleService.subtitleLocale = settings.subtitleLanguage.locale
                         await appDelegate.subtitleService.start()
+                    }
+                }
+            }
+            Menu("Subtitle Language") {
+                ForEach(SubtitleLanguage.allCases) { lang in
+                    Button("\(lang.flag) \(lang.displayName)") {
+                        AppSettings.shared.subtitleLanguage = lang
                     }
                 }
             }

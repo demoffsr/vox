@@ -9,7 +9,7 @@ function startNativeSubtitlePoll() {
     if (_nativePollTimer) return;
     console.log("[Vox bg] Starting native subtitle poll");
     pollNativeOnce(); // first poll immediately
-    _nativePollTimer = setInterval(pollNativeOnce, 1500);
+    _nativePollTimer = setInterval(pollNativeOnce, 100);
 }
 
 function stopNativeSubtitlePoll() {
