@@ -341,9 +341,8 @@ async function voxPollSubtitles() {
         try {
             const response = await browser.runtime.sendMessage({ action: "getSubtitleUpdate" });
             if (response && response.text && response.timestamp > _voxLastSubtitleTimestamp) {
-                console.log("[Vox] New subtitle:", response.text.substring(0, 60));
                 _voxLastSubtitleTimestamp = response.timestamp;
-                voxShowSubtitle(response.text);
+                // Subtitles are displayed by the native overlay panel, not in-page
             }
             if (response && response.status === "error") {
                 console.error("[Vox] Subtitle service error");
