@@ -336,10 +336,12 @@ function voxRemoveSubtitleOverlay() {
 }
 
 async function voxPollSubtitles() {
+    console.log("[Vox] Poll loop started");
     while (_voxSubtitleActive) {
         try {
             const response = await browser.runtime.sendMessage({ action: "getSubtitleUpdate" });
             if (response && response.text && response.timestamp > _voxLastSubtitleTimestamp) {
+                console.log("[Vox] New subtitle:", response.text.substring(0, 60));
                 _voxLastSubtitleTimestamp = response.timestamp;
                 voxShowSubtitle(response.text);
             }
@@ -356,13 +358,37 @@ async function voxPollSubtitles() {
 }
 
 function voxStartSubtitles() {
+    console.log("[Vox] voxStartSubtitles called, already active:", _voxSubtitleActive);
     if (_voxSubtitleActive) return;
     if (!voxCreateSubtitleOverlay()) {
-        console.error("[Vox] Could not find video player for subtitles");
-        return;
+        console.error("[Vox] Could not find video player for subtitles. Trying fallback...");
+        // Fallback: attach to video element or body
+        const video = document.querySelector('video');
+        if (video) {
+            const parent = video.closest('[class*="player"]') || video.parentElement;
+            if (parent) {
+                _voxSubtitleContainer = document.createElement('div');
+                _voxSubtitleContainer.className = 'vox-subtitle-container';
+                _voxSubtitleContainer.setAttribute('style', 'position:absolute;bottom:60px;left:0;width:100%;text-align:center;z-index:9999;pointer-events:none;transition:opacity 0.3s ease');
+                _voxSubtitleSpan = document.createElement('span');
+                _voxSubtitleSpan.className = 'vox-subtitle';
+                _voxSubtitleSpan.setAttribute('style', 'background:rgba(0,0,0,0.80);color:white;padding:6px 16px;border-radius:6px;font-size:20px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;line-height:1.4;display:inline-block;max-width:80%;text-shadow:0 1px 2px rgba(0,0,0,0.5)');
+                _voxSubtitleContainer.appendChild(_voxSubtitleSpan);
+                parent.style.position = 'relative';
+                parent.appendChild(_voxSubtitleContainer);
+                console.log("[Vox] Fallback overlay attached to:", parent.tagName, parent.className);
+            } else {
+                console.error("[Vox] No suitable parent for subtitle overlay");
+                return;
+            }
+        } else {
+            console.error("[Vox] No video element found on page");
+            return;
+        }
     }
     _voxSubtitleActive = true;
     _voxLastSubtitleTimestamp = 0;
+    console.log("[Vox] Subtitle polling started");
     voxPollSubtitles();
 }
 

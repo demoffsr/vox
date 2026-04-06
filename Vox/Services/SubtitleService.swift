@@ -4,31 +4,18 @@ import Foundation
 final class SubtitleService {
     private let audioCaptureManager = AudioCaptureManager()
     private let whisperTranscriber = WhisperTranscriber()
-    private var translator: SubtitleTranslator?
-    private let ipcFile = FileManager.default.temporaryDirectory.appendingPathComponent("vox-subtitles.json")
+    private let audioBuffer = AudioBuffer()
+    private let ipcFile: URL = {
+        let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.Vox.Vox")!
+        return container.appendingPathComponent("vox-subtitles.json")
+    }()
 
     private(set) var isRunning = false
 
     func start() async {
         guard !isRunning else { return }
 
-        // 1. Load API key
-        let apiKey: String
-        do {
-            guard let key = try KeychainHelper().load(), !key.isEmpty else {
-                print("[SubtitleService] No API key found in keychain")
-                return
-            }
-            apiKey = key
-        } catch {
-            print("[SubtitleService] Failed to load API key: \(error)")
-            return
-        }
-
-        // 2. Init translator
-        translator = SubtitleTranslator(apiKey: apiKey)
-
-        // 3. Load Whisper model
+        // Load Whisper model
         do {
             try whisperTranscriber.loadModel()
         } catch {
@@ -36,12 +23,12 @@ final class SubtitleService {
             return
         }
 
-        // 4. Set up audio chunk callback — uses completion handler, not async
+        // Set up audio chunk callback
         audioCaptureManager.onAudioChunk = { [weak self] samples in
             self?.processAudioChunk(samples)
         }
 
-        // 5. Start audio capture
+        // Start audio capture
         do {
             try await audioCaptureManager.startCapture()
         } catch {
@@ -50,6 +37,7 @@ final class SubtitleService {
         }
 
         isRunning = true
+        writeSubtitleState(text: "", status: "listening")
         print("[SubtitleService] Started — listening for audio")
     }
 
@@ -57,36 +45,88 @@ final class SubtitleService {
         guard isRunning else { return }
         isRunning = false
         await audioCaptureManager.stopCapture()
+        whisperTranscriber.cancelIfBusy()
+        audioBuffer.reset()
+        writeSubtitleState(text: "", status: "stopped")
         print("[SubtitleService] Stopped")
     }
 
-    // Called from audio queue — no async/await
+    // Called from audio queue — accumulates audio instead of dropping
     private nonisolated func processAudioChunk(_ samples: [Float]) {
-        whisperTranscriber.transcribe(audioFrames: samples) { [weak self] text in
-            guard let self, let text, !text.isEmpty else { return }
-            print("[SubtitleService] Transcribed: \(text)")
+        audioBuffer.append(samples)
+        drainPendingAudio()
+    }
 
-            // Translate on a background task
-            guard let translator = self.translator else { return }
-            Task.detached {
-                do {
-                    let translated = try await translator.translate(text)
-                    print("[SubtitleService] Translated: \(translated)")
-                    self.writeSubtitle(translated)
-                } catch {
-                    print("[SubtitleService] Translation error: \(error)")
-                }
+    /// Transcribes accumulated audio when whisper is free.
+    private nonisolated func drainPendingAudio() {
+        guard !whisperTranscriber.isBusy else { return }
+        guard let audio = audioBuffer.tryDrain() else { return }
+
+        whisperTranscriber.transcribe(audioFrames: audio) { [weak self] text in
+            guard let self else { return }
+
+            self.audioBuffer.finishDrain()
+
+            if let text, !text.isEmpty {
+                print("[SubtitleService] Transcribed: \(text)")
+                self.writeSubtitleState(text: text, status: "listening")
             }
+
+            // Process any audio that accumulated while transcribing
+            self.drainPendingAudio()
         }
     }
 
-    private nonisolated func writeSubtitle(_ text: String) {
+    private nonisolated func writeSubtitleState(text: String, status: String) {
         let dict: [String: Any] = [
             "text": text,
             "timestamp": Date().timeIntervalSince1970,
-            "status": "listening"
+            "status": status
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         try? data.write(to: ipcFile, options: .atomic)
+    }
+}
+
+/// Thread-safe audio buffer for accumulating chunks between transcription runs.
+private final class AudioBuffer: @unchecked Sendable {
+    nonisolated(unsafe) private var samples: [Float] = []
+    nonisolated(unsafe) private var _isDraining = false
+    private let lock = NSLock()
+    private let maxSamples = 160_000  // 10 seconds at 16 kHz
+
+    nonisolated init() {}
+
+    nonisolated func append(_ newSamples: [Float]) {
+        lock.lock()
+        samples.append(contentsOf: newSamples)
+        if samples.count > maxSamples {
+            let excess = samples.count - maxSamples
+            samples.removeFirst(excess)
+        }
+        lock.unlock()
+    }
+
+    nonisolated func tryDrain() -> [Float]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !_isDraining, !samples.isEmpty else { return nil }
+        _isDraining = true
+        let audio = samples
+        samples.removeAll()
+        return audio
+    }
+
+    nonisolated func finishDrain() {
+        lock.lock()
+        _isDraining = false
+        lock.unlock()
+    }
+
+    nonisolated func reset() {
+        lock.lock()
+        samples.removeAll()
+        _isDraining = false
+        lock.unlock()
     }
 }

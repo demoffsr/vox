@@ -1,10 +1,48 @@
 console.log("[Vox bg] Background script loaded!");
 
+// ---- Subtitle state cache (avoids rapid sendNativeMessage calls) ----
+let _subtitleState = { text: "", timestamp: 0, status: "stopped" };
+let _nativePollTimer = null;
+let _nativePollBusy = false;
+
+function startNativeSubtitlePoll() {
+    if (_nativePollTimer) return;
+    console.log("[Vox bg] Starting native subtitle poll");
+    pollNativeOnce(); // first poll immediately
+    _nativePollTimer = setInterval(pollNativeOnce, 1500);
+}
+
+function stopNativeSubtitlePoll() {
+    if (_nativePollTimer) {
+        clearInterval(_nativePollTimer);
+        _nativePollTimer = null;
+    }
+    _nativePollBusy = false;
+    _subtitleState = { text: "", timestamp: 0, status: "stopped" };
+}
+
+function pollNativeOnce() {
+    if (_nativePollBusy) return;
+    _nativePollBusy = true;
+    browser.runtime.sendNativeMessage("application.id", { action: "getSubtitleUpdate" })
+        .then(response => {
+            _nativePollBusy = false;
+            if (response && typeof response === "object") {
+                _subtitleState = response;
+                console.log("[Vox bg] Poll got:", (response.text || "").substring(0, 60));
+            }
+        })
+        .catch(e => {
+            _nativePollBusy = false;
+            console.error("[Vox bg] Poll error:", e.message);
+        });
+}
+
+// ---- Message handler ----
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log("[Vox bg] Message received:", request.action, "from:", sender.tab?.id ?? "popup");
 
     if (request.action === "startTranslation") {
-        // Popup asked to start — forward to active tab's content script
         handleStartTranslation(request.targetLanguage);
         sendResponse({ status: "started" });
         return true;
@@ -16,24 +54,44 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "translateChunks") {
-        // Content script sent chunks to translate
         translateChunks(request.chunks, request.targetLanguage, sender.tab?.id);
         return true;
     }
 
     if (request.action === "progressUpdate") {
-        // Forward progress to popup (it might be listening)
         return;
     }
 
     if (request.action === "startSubtitles") {
+        console.log("[Vox bg] === STARTING SUBTITLES ===");
+
+        // 1. Start native subtitle poll immediately (don't wait for native response)
+        startNativeSubtitlePoll();
+
+        // 2. Forward startSubtitlesUI to content script
+        browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+            console.log("[Vox bg] tabs.query result:", tabs.length, "tabs, first:", tabs[0]?.id);
+            if (tabs[0]) {
+                browser.tabs.sendMessage(tabs[0].id, { action: "startSubtitlesUI" }).catch(e =>
+                    console.error("[Vox bg] sendMessage to tab failed:", e.message)
+                );
+            }
+        }).catch(e => console.error("[Vox bg] tabs.query failed:", e));
+
+        // 3. Tell native app to start (fire and forget — response not critical for UI)
         browser.runtime.sendNativeMessage("application.id", { action: "startSubtitles" })
-            .then(response => sendResponse(response))
-            .catch(e => sendResponse({ error: e.message }));
+            .then(r => { console.log("[Vox bg] native start response:", JSON.stringify(r)); sendResponse(r); })
+            .catch(e => { console.error("[Vox bg] native start error:", e); sendResponse({ error: e.message }); });
         return true;
     }
 
     if (request.action === "stopSubtitles") {
+        stopNativeSubtitlePoll();
+        browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+            if (tabs[0]) {
+                browser.tabs.sendMessage(tabs[0].id, { action: "stopSubtitlesUI" }).catch(() => {});
+            }
+        });
         browser.runtime.sendNativeMessage("application.id", { action: "stopSubtitles" })
             .then(response => sendResponse(response))
             .catch(e => sendResponse({ error: e.message }));
@@ -41,10 +99,9 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "getSubtitleUpdate") {
-        browser.runtime.sendNativeMessage("application.id", { action: "getSubtitleUpdate" })
-            .then(response => sendResponse(response))
-            .catch(e => sendResponse({ error: e.message }));
-        return true;
+        // Return cached state instantly — no native message per poll
+        sendResponse(_subtitleState);
+        return;
     }
 });
 
@@ -113,7 +170,6 @@ async function translateChunks(chunks, targetLanguage, tabId) {
         }
     }
 
-    // Run with concurrency limit
     const executing = new Set();
     for (const chunk of chunks) {
         const p = translateOne(chunk);

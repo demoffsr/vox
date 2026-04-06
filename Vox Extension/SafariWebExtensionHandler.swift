@@ -90,12 +90,17 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
     // MARK: - Subtitle State
 
     private func readSubtitleState() -> [String: Any] {
-        // Read from a file the main app writes (in its container)
-        let stateFile = FileManager.default.temporaryDirectory.appendingPathComponent("vox-subtitles.json")
-        guard let data = try? Data(contentsOf: stateFile),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.Vox.Vox") else {
+            NSLog("[Vox Extension] No container for group.com.Vox.Vox")
             return ["text": "", "timestamp": 0, "status": "stopped"]
         }
+        let file = container.appendingPathComponent("vox-subtitles.json")
+        guard let data = try? Data(contentsOf: file),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            NSLog("[Vox Extension] Failed to read: %@", file.path)
+            return ["text": "", "timestamp": 0, "status": "stopped"]
+        }
+        NSLog("[Vox Extension] Read subtitle: %@", (dict["text"] as? String) ?? "(empty)")
         return dict
     }
 

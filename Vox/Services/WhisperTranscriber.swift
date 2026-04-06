@@ -1,44 +1,67 @@
 import Foundation
 #if canImport(SwiftWhisper)
-import SwiftWhisper
+@preconcurrency import SwiftWhisper
 #endif
 
 final class WhisperTranscriber: @unchecked Sendable {
     #if canImport(SwiftWhisper)
-    private var whisper: Whisper?
+    nonisolated(unsafe) private var whisper: Whisper?
     #endif
 
     private let processingQueue = DispatchQueue(label: "com.vox.whisper", qos: .userInitiated)
-    private var isBusy = false
+    nonisolated(unsafe) private var _isBusy = false
+    private let busyLock = NSLock()
 
-    func loadModel() throws {
+    nonisolated var isBusy: Bool {
+        busyLock.lock()
+        defer { busyLock.unlock() }
+        return _isBusy
+    }
+
+    nonisolated func loadModel() throws {
         guard let modelPath = Bundle.main.path(forResource: "ggml-small.en-q5_1", ofType: "bin") else {
             throw WhisperError.modelNotFound
         }
         #if canImport(SwiftWhisper)
         let modelURL = URL(fileURLWithPath: modelPath)
-        whisper = Whisper(fromFileURL: modelURL)
+
+        let params = WhisperParams(strategy: .greedy)
+        params.language = .english          // Force English — no auto-detection
+        params.no_context = true            // Each chunk independent (streaming)
+        params.single_segment = true        // Faster: one segment per chunk
+        params.n_threads = Int32(min(ProcessInfo.processInfo.activeProcessorCount, 8))
+        params.suppress_blank = true
+        params.suppress_non_speech_tokens = true
+        params.print_progress = false
+        params.print_realtime = false
+        params.print_timestamps = false
+
+        whisper = Whisper(fromFileURL: modelURL, withParams: params)
+        print("[WhisperTranscriber] Model loaded, threads: \(params.n_threads)")
         #else
         print("[WhisperTranscriber] SwiftWhisper not available — add via Xcode SPM")
         #endif
     }
 
-    func transcribe(audioFrames: [Float], completion: @escaping (String?) -> Void) {
+    nonisolated func transcribe(audioFrames: [Float], completion: @escaping (String?) -> Void) {
         #if canImport(SwiftWhisper)
         guard let whisper else {
             completion(nil)
             return
         }
 
-        // Skip if already processing
-        guard !isBusy else {
+        busyLock.lock()
+        guard !_isBusy else {
+            busyLock.unlock()
             print("[WhisperTranscriber] Skipping — already busy")
             completion(nil)
             return
         }
+        _isBusy = true
+        busyLock.unlock()
 
-        isBusy = true
-        print("[WhisperTranscriber] Starting transcription of \(audioFrames.count) samples...")
+        let duration = Double(audioFrames.count) / 16000.0
+        print("[WhisperTranscriber] Starting transcription of \(audioFrames.count) samples (\(String(format: "%.1f", duration))s)...")
 
         processingQueue.async { [weak self] in
             let group = DispatchGroup()
@@ -57,9 +80,10 @@ final class WhisperTranscriber: @unchecked Sendable {
                 group.leave()
             }
 
-            // Wait up to 60 seconds (first run is slow due to model warmup)
-            let timeout = group.wait(timeout: .now() + 60)
-            self?.isBusy = false
+            let timeout = group.wait(timeout: .now() + 30)
+            self?.busyLock.lock()
+            self?._isBusy = false
+            self?.busyLock.unlock()
 
             if timeout == .timedOut {
                 print("[WhisperTranscriber] TIMEOUT — transcription took too long")
@@ -70,6 +94,16 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
         #else
         completion(nil)
+        #endif
+    }
+
+    nonisolated func cancelIfBusy() {
+        #if canImport(SwiftWhisper)
+        guard let whisper, isBusy else { return }
+        Task {
+            try? await whisper.cancel()
+            print("[WhisperTranscriber] Cancelled ongoing transcription")
+        }
         #endif
     }
 
