@@ -9,10 +9,7 @@ final class SubtitleService {
 
     private(set) var isRunning = false
     private var pipelineTask: Task<Void, Never>?
-
-    // Thread-safe queue for pending audio chunks waiting for transcription
-    private var pendingAudio: [[Float]] = []
-    private let audioLock = NSLock()
+    private var audioContinuation: AsyncStream<[Float]>.Continuation?
 
     func start() async {
         guard !isRunning else { return }
@@ -44,15 +41,16 @@ final class SubtitleService {
             return
         }
 
-        // 4. Set up audio chunk callback: queue audio for processing
+        // 4. Create async stream for audio chunks
+        let (stream, continuation) = AsyncStream<[Float]>.makeStream()
+        self.audioContinuation = continuation
+
+        // 5. Set up audio chunk callback
         audioCaptureManager.onAudioChunk = { [weak self] samples in
-            guard let self else { return }
-            self.audioLock.lock()
-            self.pendingAudio.append(samples)
-            self.audioLock.unlock()
+            self?.audioContinuation?.yield(samples)
         }
 
-        // 5. Start audio capture
+        // 6. Start audio capture
         do {
             try await audioCaptureManager.startCapture()
         } catch {
@@ -61,39 +59,25 @@ final class SubtitleService {
             return
         }
 
-        // 6. Mark as running
+        // 7. Mark as running
         isRunning = true
         publishStatus("listening")
 
-        // 7. Start processing pipeline on a detached (non-MainActor) task
+        // 8. Start processing pipeline on detached task
         let whisper = whisperTranscriber
         let trans = translator!
-        let lock = audioLock
         let ipc = ipcFile
 
-        pipelineTask = Task.detached { [weak self] in
-            while !Task.isCancelled {
-                // Grab next audio chunk
-                lock.lock()
-                let audio = self?.pendingAudio.isEmpty == false ? self?.pendingAudio.removeFirst() : nil
-                lock.unlock()
-
-                guard let audio else {
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-                    continue
-                }
-
-                // Transcribe (runs off main thread)
+        pipelineTask = Task.detached {
+            for await audio in stream {
                 do {
                     let text = try await whisper.transcribe(audioFrames: audio)
                     guard !text.isEmpty else { continue }
                     print("[SubtitleService] Transcribed: \(text)")
 
-                    // Translate
                     let translated = try await trans.translate(text)
                     print("[SubtitleService] Translated: \(translated)")
 
-                    // Write to IPC file
                     let dict: [String: Any] = [
                         "text": translated,
                         "timestamp": Date().timeIntervalSince1970,
@@ -112,12 +96,12 @@ final class SubtitleService {
     func stop() async {
         guard isRunning else { return }
         isRunning = false
+        audioContinuation?.finish()
+        audioContinuation = nil
         pipelineTask?.cancel()
         await audioCaptureManager.stopCapture()
         publishStatus("stopped")
     }
-
-    // MARK: - Publishing
 
     private func publishStatus(_ status: String) {
         let dict: [String: Any] = ["text": "", "timestamp": 0, "status": status]
