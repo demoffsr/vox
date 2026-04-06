@@ -9,6 +9,7 @@ final class WhisperTranscriber: @unchecked Sendable {
     #endif
 
     private let processingQueue = DispatchQueue(label: "com.vox.whisper", qos: .userInitiated)
+    private var isBusy = false
 
     func loadModel() throws {
         guard let modelPath = Bundle.main.path(forResource: "ggml-small.en-q5_1", ofType: "bin") else {
@@ -22,7 +23,6 @@ final class WhisperTranscriber: @unchecked Sendable {
         #endif
     }
 
-    /// Transcribe using a completion handler on a dedicated queue (no async/await).
     func transcribe(audioFrames: [Float], completion: @escaping (String?) -> Void) {
         #if canImport(SwiftWhisper)
         guard let whisper else {
@@ -30,9 +30,17 @@ final class WhisperTranscriber: @unchecked Sendable {
             return
         }
 
+        // Skip if already processing
+        guard !isBusy else {
+            print("[WhisperTranscriber] Skipping — already busy")
+            completion(nil)
+            return
+        }
+
+        isBusy = true
         print("[WhisperTranscriber] Starting transcription of \(audioFrames.count) samples...")
 
-        processingQueue.async {
+        processingQueue.async { [weak self] in
             let group = DispatchGroup()
             group.enter()
 
@@ -49,8 +57,10 @@ final class WhisperTranscriber: @unchecked Sendable {
                 group.leave()
             }
 
-            // Wait up to 30 seconds for transcription
-            let timeout = group.wait(timeout: .now() + 30)
+            // Wait up to 60 seconds (first run is slow due to model warmup)
+            let timeout = group.wait(timeout: .now() + 60)
+            self?.isBusy = false
+
             if timeout == .timedOut {
                 print("[WhisperTranscriber] TIMEOUT — transcription took too long")
                 completion(nil)
