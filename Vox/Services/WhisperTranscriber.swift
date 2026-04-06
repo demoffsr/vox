@@ -3,12 +3,11 @@ import Foundation
 import SwiftWhisper
 #endif
 
-final class WhisperTranscriber: @unchecked Sendable {
+final class WhisperTranscriber: NSObject, @unchecked Sendable {
     #if canImport(SwiftWhisper)
     private var whisper: Whisper?
+    private var pendingContinuation: CheckedContinuation<String, Error>?
     #endif
-
-    private var isBusy = false
 
     func loadModel() throws {
         guard let modelPath = Bundle.main.path(forResource: "ggml-small.en-q5_1", ofType: "bin") else {
@@ -17,6 +16,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         #if canImport(SwiftWhisper)
         let modelURL = URL(fileURLWithPath: modelPath)
         whisper = Whisper(fromFileURL: modelURL)
+        whisper?.delegate = self
         #else
         print("[WhisperTranscriber] SwiftWhisper not available — add via Xcode SPM")
         #endif
@@ -25,19 +25,29 @@ final class WhisperTranscriber: @unchecked Sendable {
     func transcribe(audioFrames: [Float]) async throws -> String {
         #if canImport(SwiftWhisper)
         guard let whisper else { throw WhisperError.modelNotLoaded }
-        guard !isBusy else {
-            print("[WhisperTranscriber] Skipping chunk — already busy")
-            return ""
-        }
-
-        isBusy = true
-        defer { isBusy = false }
 
         print("[WhisperTranscriber] Starting transcription of \(audioFrames.count) samples...")
-        let segments = try await whisper.transcribe(audioFrames: audioFrames)
-        let text = segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
-        print("[WhisperTranscriber] Result: \(text)")
-        return text
+
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingContinuation = continuation
+            Task.detached {
+                do {
+                    let segments = try await whisper.transcribe(audioFrames: audioFrames)
+                    let text = segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                    print("[WhisperTranscriber] Result: \(text)")
+                    // If delegate didn't fire, resolve here
+                    if let cont = self.pendingContinuation {
+                        self.pendingContinuation = nil
+                        cont.resume(returning: text)
+                    }
+                } catch {
+                    if let cont = self.pendingContinuation {
+                        self.pendingContinuation = nil
+                        cont.resume(throwing: error)
+                    }
+                }
+            }
+        }
         #else
         throw WhisperError.modelNotLoaded
         #endif
@@ -55,3 +65,17 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
     }
 }
+
+#if canImport(SwiftWhisper)
+extension WhisperTranscriber: WhisperDelegate {
+    func whisper(_ aWhisper: Whisper, didCompleteWithSegments segments: [Segment]) {
+        let text = segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        print("[WhisperTranscriber] Delegate completed: \(text)")
+    }
+
+    func whisper(_ aWhisper: Whisper, didProcessNewSegments segments: [Segment], atIndex index: Int) {}
+    func whisper(_ aWhisper: Whisper, didErrorWith error: Error) {
+        print("[WhisperTranscriber] Delegate error: \(error)")
+    }
+}
+#endif
