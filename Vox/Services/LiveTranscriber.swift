@@ -1,9 +1,11 @@
 import Speech
 import AVFoundation
+import Accelerate
 
 /// Streaming speech-to-text using DictationTranscriber + SpeechAnalyzer (macOS 26+).
-/// Uses DictationTranscriber (NOT SpeechTranscriber) — optimized for real-time live captions
-/// with frequent word-by-word updates and far-field audio (speakers/video).
+/// Uses DictationTranscriber (NOT SpeechTranscriber) — optimized for real-time live captions.
+/// Preprocesses audio (high-pass filter + RMS normalization) to improve recognition of
+/// music, rap, and other content where vocals compete with instrumentals.
 final class LiveTranscriber: @unchecked Sendable {
 
     // MARK: - State (protected by lock)
@@ -19,6 +21,13 @@ final class LiveTranscriber: @unchecked Sendable {
     // Cached converter — created once, reused for every buffer
     private var cachedConverter: AVAudioConverter?
     private var cachedSourceFormat: AVAudioFormat?
+
+    // High-pass filter state (Butterworth 2nd order, 80 Hz cutoff)
+    private var hpX1: Float = 0, hpX2: Float = 0
+    private var hpY1: Float = 0, hpY2: Float = 0
+    private var hpB0: Float = 0, hpB1: Float = 0, hpB2: Float = 0
+    private var hpA1: Float = 0, hpA2: Float = 0
+    private var hpConfiguredRate: Double = 0
 
     var isRunning: Bool {
         lock.lock()
@@ -43,15 +52,16 @@ final class LiveTranscriber: @unchecked Sendable {
         guard !isRunning else { return }
 
         // DictationTranscriber — real-time dictation engine, NOT batch transcription
-        // - .farField: audio from speakers/video, not close microphone
+        // - contentHints: empty — audio is digital (ScreenCaptureKit), NOT far-field mic
         // - .volatileResults: emit partial results (word by word)
-        // - .frequentFinalization: finalize results more often (lower latency)
         // - .punctuation: auto-add punctuation
+        // Note: .frequentFinalization removed to allow more context before finalizing
+        //       (improves accuracy for fast speech/rap at cost of ~200-500ms latency)
         let dictTranscriber = DictationTranscriber(
             locale: locale,
-            contentHints: [.farField],
+            contentHints: [],
             transcriptionOptions: [.punctuation],
-            reportingOptions: [.volatileResults, .frequentFinalization],
+            reportingOptions: [.volatileResults],
             attributeOptions: []
         )
 
@@ -120,6 +130,7 @@ final class LiveTranscriber: @unchecked Sendable {
         // Fast path: format matches, no conversion needed
         if buffer.format == targetFormat {
             lock.unlock()
+            preprocessAudio(buffer)
             continuation.yield(AnalyzerInput(buffer: buffer))
             return
         }
@@ -158,6 +169,7 @@ final class LiveTranscriber: @unchecked Sendable {
         }
 
         if error == nil && outputBuffer.frameLength > 0 {
+            preprocessAudio(outputBuffer)
             continuation.yield(AnalyzerInput(buffer: outputBuffer))
         }
     }
@@ -176,9 +188,68 @@ final class LiveTranscriber: @unchecked Sendable {
         _targetFormat = nil
         cachedConverter = nil
         cachedSourceFormat = nil
+        hpX1 = 0; hpX2 = 0; hpY1 = 0; hpY2 = 0
+        hpConfiguredRate = 0
         lock.unlock()
 
         task?.cancel()
         print("[LiveTranscriber] Stopped")
+    }
+
+    // MARK: - Audio Preprocessing
+
+    /// High-pass filter + RMS normalization to improve transcription of music/noisy audio.
+    private func preprocessAudio(_ buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData else { return }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return }
+
+        let samples = channelData[0]
+        applyHighPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
+        applyRMSNormalization(samples, count: count)
+    }
+
+    /// Butterworth 2nd-order high-pass at 80 Hz — removes sub-bass (kick drums, 808s)
+    /// that carries no speech information but interferes with recognition.
+    private func applyHighPassFilter(_ samples: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
+        if sampleRate != hpConfiguredRate {
+            let omega = 2.0 * .pi * 80.0 / sampleRate
+            let cosW = cos(omega)
+            let alpha = sin(omega) / sqrt(2.0) // Q = 1/√2 (Butterworth)
+            let a0 = 1.0 + alpha
+
+            hpB0 = Float((1.0 + cosW) / 2.0 / a0)
+            hpB1 = Float(-(1.0 + cosW) / a0)
+            hpB2 = Float((1.0 + cosW) / 2.0 / a0)
+            hpA1 = Float(-2.0 * cosW / a0)
+            hpA2 = Float((1.0 - alpha) / a0)
+            hpConfiguredRate = sampleRate
+            hpX1 = 0; hpX2 = 0; hpY1 = 0; hpY2 = 0
+        }
+
+        for i in 0..<count {
+            let x = samples[i]
+            let y = hpB0 * x + hpB1 * hpX1 + hpB2 * hpX2 - hpA1 * hpY1 - hpA2 * hpY2
+            hpX2 = hpX1; hpX1 = x
+            hpY2 = hpY1; hpY1 = y
+            samples[i] = y
+        }
+    }
+
+    /// Normalizes RMS to ~0.1 so quiet speech and loud music hit the recognizer at consistent levels.
+    private func applyRMSNormalization(_ samples: UnsafeMutablePointer<Float>, count: Int) {
+        var rms: Float = 0
+        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
+
+        guard rms > 1e-6 else { return } // silence — don't amplify noise floor
+
+        let targetRMS: Float = 0.1
+        var gain = min(targetRMS / rms, 10.0) // cap at +20 dB
+
+        vDSP_vsmul(samples, 1, &gain, samples, 1, vDSP_Length(count))
+
+        // Hard clip to [-1, 1] to prevent distortion
+        var lo: Float = -1.0, hi: Float = 1.0
+        vDSP_vclip(samples, 1, &lo, &hi, samples, 1, vDSP_Length(count))
     }
 }
