@@ -8,6 +8,9 @@ final class WhisperTranscriber: @unchecked Sendable {
     private var whisper: Whisper?
     #endif
 
+    // Serialize transcription — Whisper can only process one chunk at a time
+    private let semaphore = DispatchSemaphore(value: 1)
+
     func loadModel() throws {
         guard let modelPath = Bundle.main.path(forResource: "ggml-small.en-q5_1", ofType: "bin") else {
             throw WhisperError.modelNotFound
@@ -23,6 +26,11 @@ final class WhisperTranscriber: @unchecked Sendable {
     func transcribe(audioFrames: [Float]) async throws -> String {
         #if canImport(SwiftWhisper)
         guard let whisper else { throw WhisperError.modelNotLoaded }
+
+        // Wait for previous transcription to finish
+        semaphore.wait()
+        defer { semaphore.signal() }
+
         let segments = try await whisper.transcribe(audioFrames: audioFrames)
         return segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
         #else
