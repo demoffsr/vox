@@ -10,9 +10,9 @@ final class SubtitleService {
     private(set) var isRunning = false
     private var pipelineTask: Task<Void, Never>?
 
-    // Thread-safe queue for pending transcription chunks
-    private var pendingChunks: [String] = []
-    private let chunkLock = NSLock()
+    // Thread-safe queue for pending audio chunks waiting for transcription
+    private var pendingAudio: [[Float]] = []
+    private let audioLock = NSLock()
 
     func start() async {
         guard !isRunning else { return }
@@ -44,20 +44,12 @@ final class SubtitleService {
             return
         }
 
-        // 4. Set up audio chunk callback: transcribe and enqueue
+        // 4. Set up audio chunk callback: queue audio for processing
         audioCaptureManager.onAudioChunk = { [weak self] samples in
             guard let self else { return }
-            Task {
-                do {
-                    let text = try await self.whisperTranscriber.transcribe(audioFrames: samples)
-                    guard !text.isEmpty else { return }
-                    self.chunkLock.lock()
-                    self.pendingChunks.append(text)
-                    self.chunkLock.unlock()
-                } catch {
-                    print("[SubtitleService] Transcription error: \(error)")
-                }
-            }
+            self.audioLock.lock()
+            self.pendingAudio.append(samples)
+            self.audioLock.unlock()
         }
 
         // 5. Start audio capture
@@ -71,13 +63,49 @@ final class SubtitleService {
 
         // 6. Mark as running
         isRunning = true
-
-        // 7. Publish listening status
         publishStatus("listening")
 
-        // 8. Start translation pipeline loop
-        pipelineTask = Task { [weak self] in
-            await self?.translationLoop()
+        // 7. Start processing pipeline on a detached (non-MainActor) task
+        let whisper = whisperTranscriber
+        let trans = translator!
+        let lock = audioLock
+        let ipc = ipcFile
+
+        pipelineTask = Task.detached { [weak self] in
+            while !Task.isCancelled {
+                // Grab next audio chunk
+                lock.lock()
+                let audio = self?.pendingAudio.isEmpty == false ? self?.pendingAudio.removeFirst() : nil
+                lock.unlock()
+
+                guard let audio else {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                    continue
+                }
+
+                // Transcribe (runs off main thread)
+                do {
+                    let text = try await whisper.transcribe(audioFrames: audio)
+                    guard !text.isEmpty else { continue }
+                    print("[SubtitleService] Transcribed: \(text)")
+
+                    // Translate
+                    let translated = try await trans.translate(text)
+                    print("[SubtitleService] Translated: \(translated)")
+
+                    // Write to IPC file
+                    let dict: [String: Any] = [
+                        "text": translated,
+                        "timestamp": Date().timeIntervalSince1970,
+                        "status": "listening"
+                    ]
+                    if let data = try? JSONSerialization.data(withJSONObject: dict) {
+                        try? data.write(to: ipc, options: .atomic)
+                    }
+                } catch {
+                    print("[SubtitleService] Pipeline error: \(error)")
+                }
+            }
         }
     }
 
@@ -87,44 +115,12 @@ final class SubtitleService {
         pipelineTask?.cancel()
         await audioCaptureManager.stopCapture()
         publishStatus("stopped")
-        publishSubtitle("")
-    }
-
-    // MARK: - Translation Pipeline
-
-    private func translationLoop() async {
-        while !Task.isCancelled {
-            // Grab next pending chunk
-            chunkLock.lock()
-            let chunk = pendingChunks.isEmpty ? nil : pendingChunks.removeFirst()
-            chunkLock.unlock()
-
-            if let chunk {
-                do {
-                    guard let translator else { continue }
-                    let translated = try await translator.translate(chunk)
-                    publishSubtitle(translated)
-                } catch {
-                    print("[SubtitleService] Translation error: \(error)")
-                }
-            } else {
-                // No chunk available — sleep briefly before checking again
-                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            }
-        }
     }
 
     // MARK: - Publishing
 
-    private func publishSubtitle(_ text: String) {
-        writeIPC(["text": text, "timestamp": Date().timeIntervalSince1970, "status": "listening"])
-    }
-
     private func publishStatus(_ status: String) {
-        writeIPC(["text": "", "timestamp": 0, "status": status])
-    }
-
-    private func writeIPC(_ dict: [String: Any]) {
+        let dict: [String: Any] = ["text": "", "timestamp": 0, "status": status]
         guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         try? data.write(to: ipcFile, options: .atomic)
     }
