@@ -34,6 +34,8 @@ final class AudioCaptureManager: NSObject, @unchecked Sendable {
     /// Called on `audioQueue` when a 3-second voiced chunk is ready.
     var onAudioChunk: (([Float]) -> Void)?
 
+    private var audioCallbackCount = 0
+
     // MARK: - Public API
 
     func startCapture() async throws {
@@ -69,6 +71,7 @@ final class AudioCaptureManager: NSObject, @unchecked Sendable {
 
         try await stream.startCapture()
         self.stream = stream
+        print("[AudioCapture] Started capturing Safari audio")
     }
 
     func stopCapture() async {
@@ -93,8 +96,18 @@ extension AudioCaptureManager: SCStreamOutput {
         guard type == .audio else { return }
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
 
+        audioCallbackCount += 1
+        if audioCallbackCount <= 3 || audioCallbackCount % 50 == 0 {
+            print("[AudioCapture] Audio callback #\(audioCallbackCount), samples in buffer: \(self.sampleBuffer.count)")
+        }
+
         let samples = extractPCMSamples(from: sampleBuffer)
-        guard !samples.isEmpty else { return }
+        guard !samples.isEmpty else {
+            if audioCallbackCount <= 3 {
+                print("[AudioCapture] extractPCMSamples returned empty")
+            }
+            return
+        }
 
         self.sampleBuffer.append(contentsOf: samples)
 
@@ -104,8 +117,12 @@ extension AudioCaptureManager: SCStreamOutput {
 
             // Voice Activity Detection: skip silence.
             let peak = chunk.lazy.map { abs($0) }.max() ?? 0
-            guard peak >= vadThreshold else { continue }
+            if peak < vadThreshold {
+                print("[AudioCapture] Chunk skipped (silent), peak: \(peak)")
+                continue
+            }
 
+            print("[AudioCapture] Dispatching chunk, peak amplitude: \(peak)")
             onAudioChunk?(chunk)
         }
     }
