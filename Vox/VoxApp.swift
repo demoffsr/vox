@@ -5,26 +5,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = AppCoordinator()
     let subtitleService = SubtitleService()
     private var settingsWindow: NSWindow?
-    private var subtitlePollingTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Register this object as the Services provider
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
 
-        // Poll file-based IPC for subtitle activation flag
-        subtitlePollingTask = Task {
-            let controlFile = URL(fileURLWithPath: "/tmp/vox-control.json")
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                let active = Self.readControlFlag(from: controlFile)
-                if active && !subtitleService.isRunning {
-                    await subtitleService.start()
-                } else if !active && subtitleService.isRunning {
-                    await subtitleService.stop()
-                }
-            }
-        }
+        // Listen for start/stop subtitle commands from Safari extension
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(handleStartSubtitles),
+            name: NSNotification.Name("com.vox.startSubtitles"), object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(handleStopSubtitles),
+            name: NSNotification.Name("com.vox.stopSubtitles"), object: nil)
+    }
+
+    @objc private func handleStartSubtitles() {
+        print("[Vox] Received startSubtitles notification")
+        Task { await subtitleService.start() }
+    }
+
+    @objc private func handleStopSubtitles() {
+        print("[Vox] Received stopSubtitles notification")
+        Task { await subtitleService.stop() }
     }
 
     /// Called by macOS Services menu — "Translate with Vox"
@@ -38,21 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         coordinator.translateText(text)
-    }
-
-    static func readControlFlag(from url: URL) -> Bool {
-        guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        return dict["active"] as? Bool ?? false
-    }
-
-    static func writeControlFlag(_ active: Bool, to url: URL) {
-        let dict: [String: Any] = ["active": active]
-        if let data = try? JSONSerialization.data(withJSONObject: dict) {
-            try? data.write(to: url, options: .atomic)
-        }
     }
 
     func openSettings() {
@@ -94,12 +82,9 @@ struct VoxApp: App {
             Divider()
             Button(appDelegate.subtitleService.isRunning ? "Stop Live Subtitles" : "Start Live Subtitles") {
                 Task {
-                    let controlFile = URL(fileURLWithPath: "/tmp/vox-control.json")
                     if appDelegate.subtitleService.isRunning {
-                        AppDelegate.writeControlFlag(false, to: controlFile)
                         await appDelegate.subtitleService.stop()
                     } else {
-                        AppDelegate.writeControlFlag(true, to: controlFile)
                         await appDelegate.subtitleService.start()
                     }
                 }

@@ -5,7 +5,7 @@ final class SubtitleService {
     private let audioCaptureManager = AudioCaptureManager()
     private let whisperTranscriber = WhisperTranscriber()
     private var translator: SubtitleTranslator?
-    private let ipcFile = URL(fileURLWithPath: "/tmp/vox-subtitles.json")
+    private let ipcFile = FileManager.default.temporaryDirectory.appendingPathComponent("vox-subtitles.json")
 
     private(set) var isRunning = false
     private var pipelineTask: Task<Void, Never>?

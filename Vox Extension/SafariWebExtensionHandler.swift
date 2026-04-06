@@ -20,13 +20,15 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         case "ping":
             respond(with: ["status": "ok"], context: context)
         case "startSubtitles":
-            writeIPCControl(active: true)
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name("com.vox.startSubtitles"), object: nil, userInfo: nil, deliverImmediately: true)
             respond(with: ["status": "started"], context: context)
         case "stopSubtitles":
-            writeIPCControl(active: false)
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name("com.vox.stopSubtitles"), object: nil, userInfo: nil, deliverImmediately: true)
             respond(with: ["status": "stopped"], context: context)
         case "getSubtitleUpdate":
-            let result = readIPCSubtitle()
+            let result = readSubtitleState()
             respond(with: result, context: context)
         default:
             respond(with: ["error": "Unknown action: \(action)"], context: context)
@@ -85,20 +87,12 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         }
     }
 
-    // MARK: - File-based IPC
+    // MARK: - Subtitle State
 
-    private let ipcControlFile = URL(fileURLWithPath: "/tmp/vox-control.json")
-    private let ipcSubtitleFile = URL(fileURLWithPath: "/tmp/vox-subtitles.json")
-
-    private func writeIPCControl(active: Bool) {
-        let dict: [String: Any] = ["active": active]
-        if let data = try? JSONSerialization.data(withJSONObject: dict) {
-            try? data.write(to: ipcControlFile, options: .atomic)
-        }
-    }
-
-    private func readIPCSubtitle() -> [String: Any] {
-        guard let data = try? Data(contentsOf: ipcSubtitleFile),
+    private func readSubtitleState() -> [String: Any] {
+        // Read from a file the main app writes (in its container)
+        let stateFile = FileManager.default.temporaryDirectory.appendingPathComponent("vox-subtitles.json")
+        guard let data = try? Data(contentsOf: stateFile),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return ["text": "", "timestamp": 0, "status": "stopped"]
         }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D88525BF2F83ADFD0071FD0E /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = D88525BE2F83ADFD0071FD0E /* SwiftWhisper */; };
 		D8D503E02F82A872006BD6A9 /* Vox Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -93,6 +94,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D88525BF2F83ADFD0071FD0E /* SwiftWhisper in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -170,6 +172,7 @@
 			);
 			name = Vox;
 			packageProductDependencies = (
+				D88525BE2F83ADFD0071FD0E /* SwiftWhisper */,
 			);
 			productName = Vox;
 			productReference = D8F4EA012F8289C0006040E2 /* Vox.app */;
@@ -229,6 +232,7 @@
 			mainGroup = D8F4E9F82F8289C0006040E2;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				D88525BD2F83ADFD0071FD0E /* XCRemoteSwiftPackageReference "SwiftWhisper" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D8F4EA022F8289C0006040E2 /* Products */;
@@ -645,6 +649,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D88525BD2F83ADFD0071FD0E /* XCRemoteSwiftPackageReference "SwiftWhisper" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/exPHAT/SwiftWhisper";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D88525BE2F83ADFD0071FD0E /* SwiftWhisper */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D88525BD2F83ADFD0071FD0E /* XCRemoteSwiftPackageReference "SwiftWhisper" */;
+			productName = SwiftWhisper;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D8F4E9F92F8289C0006040E2 /* Project object */;
 }
