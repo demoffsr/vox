@@ -85,3 +85,51 @@ function showTranslateState() {
     translateBtn.textContent = "⚡ Translate Page";
     translating = false;
 }
+
+// ============================================================
+// LIVE SUBTITLES
+// ============================================================
+
+const subtitleBtn = document.getElementById("subtitleBtn");
+const subtitleStatus = document.getElementById("subtitleStatus");
+const subtitleStatusText = document.getElementById("subtitleStatusText");
+let subtitlesActive = false;
+
+subtitleBtn.addEventListener("click", async () => {
+    if (subtitlesActive) {
+        try {
+            await browser.runtime.sendMessage({ action: "stopSubtitles" });
+            const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+            if (tabs[0]) {
+                await browser.tabs.sendMessage(tabs[0].id, { action: "stopSubtitlesUI" });
+            }
+        } catch (e) {
+            console.error("[Vox popup] Stop subtitles error:", e);
+        }
+        subtitlesActive = false;
+        subtitleBtn.textContent = "🎬 Live Subtitles";
+        subtitleBtn.classList.remove("active");
+        subtitleStatus.style.display = "none";
+    } else {
+        try {
+            const response = await browser.runtime.sendMessage({ action: "startSubtitles" });
+            if (response?.error) {
+                showError(response.error);
+                return;
+            }
+            const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+            if (tabs[0]) {
+                await browser.tabs.sendMessage(tabs[0].id, { action: "startSubtitlesUI" });
+            }
+        } catch (e) {
+            console.error("[Vox popup] Start subtitles error:", e);
+            showError("Failed to start subtitles: " + e.message);
+            return;
+        }
+        subtitlesActive = true;
+        subtitleBtn.textContent = "⏹ Stop Subtitles";
+        subtitleBtn.classList.add("active");
+        subtitleStatus.style.display = "flex";
+        subtitleStatusText.textContent = "Listening...";
+    }
+});

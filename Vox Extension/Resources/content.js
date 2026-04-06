@@ -262,4 +262,122 @@ function checkAutoTranslate() {
     } catch {}
 }
 
+// ============================================================
+// LIVE SUBTITLES — overlay + polling
+// ============================================================
+
+let _voxSubtitleActive = false;
+let _voxSubtitleContainer = null;
+let _voxSubtitleSpan = null;
+let _voxLastSubtitleTimestamp = 0;
+let _voxSubtitleFadeTimer = null;
+
+function voxCreateSubtitleOverlay() {
+    const player = document.querySelector('.html5-video-player');
+    if (!player) return false;
+
+    if (_voxSubtitleContainer && player.contains(_voxSubtitleContainer)) return true;
+
+    _voxSubtitleContainer = document.createElement('div');
+    _voxSubtitleContainer.className = 'vox-subtitle-container';
+    _voxSubtitleContainer.setAttribute('style', [
+        'position: absolute',
+        'bottom: 60px',
+        'left: 0',
+        'width: 100%',
+        'text-align: center',
+        'z-index: 9999',
+        'pointer-events: none',
+        'transition: opacity 0.3s ease'
+    ].join('; '));
+
+    _voxSubtitleSpan = document.createElement('span');
+    _voxSubtitleSpan.className = 'vox-subtitle';
+    _voxSubtitleSpan.setAttribute('style', [
+        'background: rgba(0, 0, 0, 0.80)',
+        'color: white',
+        'padding: 6px 16px',
+        'border-radius: 6px',
+        'font-size: 20px',
+        'font-family: -apple-system, BlinkMacSystemFont, sans-serif',
+        'line-height: 1.4',
+        'display: inline-block',
+        'max-width: 80%',
+        'text-shadow: 0 1px 2px rgba(0,0,0,0.5)'
+    ].join('; '));
+
+    _voxSubtitleContainer.appendChild(_voxSubtitleSpan);
+    player.style.position = 'relative';
+    player.appendChild(_voxSubtitleContainer);
+    return true;
+}
+
+function voxShowSubtitle(text) {
+    if (!_voxSubtitleSpan) return;
+    _voxSubtitleSpan.textContent = text;
+    _voxSubtitleContainer.style.opacity = '1';
+
+    if (_voxSubtitleFadeTimer) clearTimeout(_voxSubtitleFadeTimer);
+    _voxSubtitleFadeTimer = setTimeout(() => {
+        if (_voxSubtitleContainer) _voxSubtitleContainer.style.opacity = '0';
+    }, 5000);
+}
+
+function voxRemoveSubtitleOverlay() {
+    if (_voxSubtitleContainer) {
+        _voxSubtitleContainer.remove();
+        _voxSubtitleContainer = null;
+        _voxSubtitleSpan = null;
+    }
+    if (_voxSubtitleFadeTimer) {
+        clearTimeout(_voxSubtitleFadeTimer);
+        _voxSubtitleFadeTimer = null;
+    }
+}
+
+async function voxPollSubtitles() {
+    while (_voxSubtitleActive) {
+        try {
+            const response = await browser.runtime.sendMessage({ action: "getSubtitleUpdate" });
+            if (response && response.text && response.timestamp > _voxLastSubtitleTimestamp) {
+                _voxLastSubtitleTimestamp = response.timestamp;
+                voxShowSubtitle(response.text);
+            }
+            if (response && response.status === "error") {
+                console.error("[Vox] Subtitle service error");
+                voxStopSubtitles();
+                return;
+            }
+        } catch (e) {
+            console.error("[Vox] Poll error:", e);
+        }
+        await new Promise(r => setTimeout(r, 500));
+    }
+}
+
+function voxStartSubtitles() {
+    if (_voxSubtitleActive) return;
+    if (!voxCreateSubtitleOverlay()) {
+        console.error("[Vox] Could not find video player for subtitles");
+        return;
+    }
+    _voxSubtitleActive = true;
+    _voxLastSubtitleTimestamp = 0;
+    voxPollSubtitles();
+}
+
+function voxStopSubtitles() {
+    _voxSubtitleActive = false;
+    voxRemoveSubtitleOverlay();
+}
+
+browser.runtime.onMessage.addListener((message) => {
+    if (message.action === "startSubtitlesUI") {
+        voxStartSubtitles();
+    }
+    if (message.action === "stopSubtitlesUI") {
+        voxStopSubtitles();
+    }
+});
+
 } // end guard

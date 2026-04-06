@@ -25,6 +25,27 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Forward progress to popup (it might be listening)
         return;
     }
+
+    if (request.action === "startSubtitles") {
+        browser.runtime.sendNativeMessage("application.id", { action: "startSubtitles" })
+            .then(response => sendResponse(response))
+            .catch(e => sendResponse({ error: e.message }));
+        return true;
+    }
+
+    if (request.action === "stopSubtitles") {
+        browser.runtime.sendNativeMessage("application.id", { action: "stopSubtitles" })
+            .then(response => sendResponse(response))
+            .catch(e => sendResponse({ error: e.message }));
+        return true;
+    }
+
+    if (request.action === "getSubtitleUpdate") {
+        browser.runtime.sendNativeMessage("application.id", { action: "getSubtitleUpdate" })
+            .then(response => sendResponse(response))
+            .catch(e => sendResponse({ error: e.message }));
+        return true;
+    }
 });
 
 async function handleStartTranslation(targetLanguage) {

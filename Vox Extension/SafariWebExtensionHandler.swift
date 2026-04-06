@@ -19,6 +19,15 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             handleTranslate(message: message, context: context)
         case "ping":
             respond(with: ["status": "ok"], context: context)
+        case "startSubtitles":
+            writeIPCControl(active: true)
+            respond(with: ["status": "started"], context: context)
+        case "stopSubtitles":
+            writeIPCControl(active: false)
+            respond(with: ["status": "stopped"], context: context)
+        case "getSubtitleUpdate":
+            let result = readIPCSubtitle()
+            respond(with: result, context: context)
         default:
             respond(with: ["error": "Unknown action: \(action)"], context: context)
         }
@@ -74,6 +83,26 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                 self.respond(with: ["error": error.localizedDescription], context: context)
             }
         }
+    }
+
+    // MARK: - File-based IPC
+
+    private let ipcControlFile = URL(fileURLWithPath: "/tmp/vox-control.json")
+    private let ipcSubtitleFile = URL(fileURLWithPath: "/tmp/vox-subtitles.json")
+
+    private func writeIPCControl(active: Bool) {
+        let dict: [String: Any] = ["active": active]
+        if let data = try? JSONSerialization.data(withJSONObject: dict) {
+            try? data.write(to: ipcControlFile, options: .atomic)
+        }
+    }
+
+    private func readIPCSubtitle() -> [String: Any] {
+        guard let data = try? Data(contentsOf: ipcSubtitleFile),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ["text": "", "timestamp": 0, "status": "stopped"]
+        }
+        return dict
     }
 
     private func respond(with message: [String: Any], context: NSExtensionContext) {
