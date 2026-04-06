@@ -33,9 +33,7 @@ final class SubtitleService {
                 } else {
                     self.subtitlePanel.showVolatile(text)
                 }
-                // Write display text to IPC for Safari extension
-                let displayText = self.subtitlePanel.textModel.displayText
-                self.throttledWriteIPC(text: displayText)
+                self.throttledWriteIPC(text: text)
             }
         }
 

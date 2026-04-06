@@ -1,66 +1,35 @@
 import AppKit
-import SwiftUI
 
-/// Observable model for subtitle text — enables lightweight in-place updates.
-@Observable
-@MainActor
-final class SubtitleTextModel {
-    var finalizedText: String = ""
-    var volatileText: String = ""
-    var isVisible: Bool = false
+// MARK: - Subtitle Panel (Pure AppKit)
 
-    /// The display string: finalized lines + current volatile words.
-    var displayText: String {
-        let combined: String
-        if finalizedText.isEmpty {
-            combined = volatileText
-        } else if volatileText.isEmpty {
-            combined = finalizedText
-        } else {
-            combined = finalizedText + " " + volatileText
-        }
-        // Keep last ~20 words for readability
-        let words = combined.split(separator: " ")
-        if words.count > 20 {
-            return words.suffix(20).joined(separator: " ")
-        }
-        return combined
-    }
-
-    func appendFinal(_ text: String) {
-        if finalizedText.isEmpty {
-            finalizedText = text
-        } else {
-            finalizedText += " " + text
-        }
-        volatileText = ""
-        // Trim finalized text to prevent unbounded growth (keep last ~40 words)
-        let words = finalizedText.split(separator: " ")
-        if words.count > 40 {
-            finalizedText = words.suffix(40).joined(separator: " ")
-        }
-    }
-
-    func updateVolatile(_ text: String) {
-        volatileText = text
-    }
-
-    func clear() {
-        finalizedText = ""
-        volatileText = ""
-    }
-}
-
-/// Floating subtitle overlay at the bottom of the screen.
-/// Visible over any application, including fullscreen apps.
+/// Floating subtitle overlay. Pure AppKit — no SwiftUI, no observation issues.
+/// Pixel-measured line breaking, YouTube-style 2-line display.
 @MainActor
 final class SubtitlePanel: NSPanel {
-    let textModel = SubtitleTextModel()
+    private let label = NSTextField(labelWithString: "")
     private var fadeTimer: Timer?
+    private var isFadingOut = false
+
+    private var confirmedWords: [String] = []
+    private var volatileText: String = ""
+
+    private let maxLineWidth: CGFloat = 450
+    private let subtitleFont = NSFont.systemFont(ofSize: 20, weight: .medium)
+    private static let panelWidth: CGFloat = 520
+
+    /// Combined display text (for IPC).
+    var displayText: String {
+        var all = confirmedWords.joined(separator: " ")
+        if !volatileText.isEmpty {
+            if !all.isEmpty { all += " " }
+            all += volatileText
+        }
+        return all
+    }
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 60),
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 100),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -81,101 +50,136 @@ final class SubtitlePanel: NSPanel {
         ignoresMouseEvents = false
         alphaValue = 0
 
-        // Single hosting view that observes the model — never recreated
-        let view = SubtitleContentView(model: textModel)
-        let hosting = NSHostingView(rootView: view)
-        hosting.wantsLayer = true
-        hosting.layer?.backgroundColor = CGColor.clear
-        self.contentView = hosting
+        // Dark rounded background
+        let bg = NSView(frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 100))
+        bg.wantsLayer = true
+        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        bg.layer?.cornerRadius = 10
+
+        // Label setup
+        label.font = subtitleFont
+        label.textColor = .white
+        label.backgroundColor = .clear
+        label.isBezeled = false
+        label.isEditable = false
+        label.isSelectable = false
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 2
+        label.alignment = .left
+        label.cell?.wraps = true
+        label.cell?.isScrollable = false
+
+        bg.addSubview(label)
+        self.contentView = bg
+
+        // Layout
+        bg.autoresizingMask = [.width, .height]
+        label.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -24),
+            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: 12),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -12),
+        ])
+
+        positionAtBottom()
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Update with volatile (partial) text — word-by-word as speech is recognized.
+    // MARK: - Public API
+
     func showVolatile(_ text: String) {
-        textModel.updateVolatile(text)
-        ensureVisible()
-        resetFadeTimer()
+        volatileText = text
+        updateLabel()
+        show()
     }
 
-    /// Update with finalized text — confirmed, won't change.
     func showFinal(_ text: String) {
-        textModel.appendFinal(text)
-        ensureVisible()
-        resetFadeTimer()
+        confirmedWords += text.split(separator: " ").map(String.init)
+        volatileText = ""
+        updateLabel()
+        show()
+        // Trim old words
+        if confirmedWords.count > 60 {
+            confirmedWords = Array(confirmedWords.suffix(30))
+        }
     }
 
-    /// Hide subtitles.
     func fadeOut() {
+        guard !isFadingOut else { return }
+        isFadingOut = true
         fadeTimer?.invalidate()
         fadeTimer = nil
-        textModel.isVisible = false
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.3
             animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            self?.orderOut(nil)
-            self?.textModel.clear()
+            guard let self, self.isFadingOut else { return }
+            self.isFadingOut = false
+            self.orderOut(nil)
+            self.confirmedWords.removeAll()
+            self.volatileText = ""
+            self.label.stringValue = ""
         })
     }
 
-    private func ensureVisible() {
-        textModel.isVisible = true
-        if !isVisible {
-            positionAtBottom()
-            orderFrontRegardless()
+    // MARK: - Private
+
+    private func updateLabel() {
+        // Combine all words
+        var allWords = confirmedWords
+        if !volatileText.isEmpty {
+            allWords += volatileText.split(separator: " ").map(String.init)
         }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
-            animator().alphaValue = 1
+
+        // Word-wrap by measured pixel width
+        var lines: [String] = []
+        var currentLine = ""
+        for word in allWords {
+            let candidate = currentLine.isEmpty ? word : currentLine + " " + word
+            if measure(candidate) > maxLineWidth && !currentLine.isEmpty {
+                lines.append(currentLine)
+                currentLine = word
+            } else {
+                currentLine = candidate
+            }
         }
-        // Reposition as text grows/shrinks
-        positionAtBottom()
+        if !currentLine.isEmpty {
+            lines.append(currentLine)
+        }
+
+        // Show last 2 lines
+        let visible = lines.suffix(2)
+        label.stringValue = visible.joined(separator: "\n")
     }
 
-    private func resetFadeTimer() {
+    private func show() {
+        isFadingOut = false
         fadeTimer?.invalidate()
+        alphaValue = 1
+        if !isVisible {
+            positionAtBottom()
+        }
+        orderFrontRegardless()
+
         fadeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.fadeOut()
-            }
+            DispatchQueue.main.async { self?.fadeOut() }
         }
     }
 
     private func positionAtBottom() {
-        guard let screen = NSScreen.main, let hosting = contentView as? NSHostingView<SubtitleContentView> else { return }
-        let size = hosting.fittingSize
-        let clamped = NSSize(width: min(size.width, 800), height: max(size.height, 40))
-        setContentSize(clamped)
+        guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
-        let x = screenFrame.midX - clamped.width / 2
-        let y = screenFrame.minY + 80
-        setFrameOrigin(NSPoint(x: x, y: y))
+        setFrameOrigin(NSPoint(
+            x: screenFrame.midX - Self.panelWidth / 2,
+            y: screenFrame.minY + 80
+        ))
     }
-}
 
-// MARK: - Subtitle Content View
-
-private struct SubtitleContentView: View {
-    @State var model: SubtitleTextModel
-
-    var body: some View {
-        let text = model.displayText
-        if !text.isEmpty {
-            Text(text)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(3)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.black.opacity(0.75))
-                )
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 760)
-                .animation(.easeOut(duration: 0.08), value: text)
-        }
+    private func measure(_ text: String) -> CGFloat {
+        let attrs: [NSAttributedString.Key: Any] = [.font: subtitleFont]
+        return ceil((text as NSString).size(withAttributes: attrs).width)
     }
 }
