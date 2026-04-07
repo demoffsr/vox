@@ -27,22 +27,39 @@ final class SubtitleService {
     private var lastTranslation: (english: String, russian: String)?
     private var rateLimitUntil: TimeInterval = 0
 
+    // Translation stream window
+    private var streamViewModel: TranslationStreamViewModel?
+    private var streamPanel: TranslationStreamPanel?
+
     /// The current subtitle language locale identifier (e.g. "en-US", "ru-RU").
     var subtitleLocale: Locale = Locale(identifier: "en-US")
 
     func start() async {
         guard !isRunning else { return }
 
+        let translationActive = AppSettings.shared.subtitleTranslationLanguage != nil
+
         transcriber.onSubtitle = { [weak self] text, isFinal in
             Task { @MainActor in
                 guard let self else { return }
-                if isFinal {
-                    self.subtitlePanel.showFinal(text)
+                if translationActive {
+                    // Accumulate words for overlap trimming, but don't show SubtitlePanel
+                    if isFinal {
+                        self.subtitlePanel.accumulateFinal(text)
+                    } else {
+                        self.subtitlePanel.accumulateVolatile(text)
+                    }
                 } else {
-                    self.subtitlePanel.showVolatile(text)
+                    if isFinal {
+                        self.subtitlePanel.showFinal(text)
+                    } else {
+                        self.subtitlePanel.showVolatile(text)
+                    }
                 }
                 self.throttledWriteIPC(text: self.subtitlePanel.displayText)
-                self.onNewWords()
+                if translationActive {
+                    self.onNewWords()
+                }
             }
         }
 
@@ -68,6 +85,25 @@ final class SubtitleService {
         }
 
         isRunning = true
+
+        // Open translation stream panel if translation is active
+        if translationActive {
+            let vm = TranslationStreamViewModel()
+            vm.isActive = true
+            vm.selectedLanguage = AppSettings.shared.subtitleTranslationLanguage ?? .russian
+            streamViewModel = vm
+
+            let panel = TranslationStreamPanel(viewModel: vm)
+            panel.onClose = { [weak self] in
+                Task { @MainActor in
+                    AppSettings.shared.subtitleTranslationLanguage = nil
+                    await self?.stop()
+                }
+            }
+            streamPanel = panel
+            panel.showCentered()
+        }
+
         writeSubtitleState(text: "", status: "listening")
         print("[SubtitleService] Started")
     }
@@ -85,6 +121,12 @@ final class SubtitleService {
         lastTranslationTime = 0
         lastShownTranslation = ""
         lastTranslation = nil
+
+        // Dismiss translation stream
+        streamViewModel?.isActive = false
+        streamPanel?.dismiss()
+        streamViewModel = nil
+        streamPanel = nil
 
         captureTask?.cancel()
         captureTask = nil
@@ -174,7 +216,12 @@ final class SubtitleService {
                         return
                     }
                     self.lastTranslation = (english: input, russian: result)
-                    self.subtitlePanel.showTranslation(result)
+
+                    if let vm = self.streamViewModel {
+                        vm.append(result)
+                    } else {
+                        self.subtitlePanel.showTranslation(result)
+                    }
                     self.lastShownTranslation = result
                     self.throttledWriteIPC(text: result)
                 }
