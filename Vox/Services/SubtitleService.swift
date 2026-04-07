@@ -125,20 +125,25 @@ final class SubtitleService {
         let words = subtitlePanel.originalDisplayText.split(separator: " ").map(String.init)
         guard words.count >= 8 else { return }
 
-        let input = words.suffix(12).joined(separator: " ")
-        guard input != lastTranslatedInput else { return }
+        let rawInput = words.suffix(12).joined(separator: " ")
+        guard rawInput != lastTranslatedInput else { return }
 
-        // Skip if too few genuinely new words (< 4) — previous subtitle is still valid
-        if !lastTranslatedInput.isEmpty {
-            let prevSet = Set(lastTranslatedInput.lowercased().split(separator: " "))
-            let newCount = input.lowercased().split(separator: " ").filter { !prevSet.contains($0) }.count
-            guard newCount >= 5 else { return }
-        }
+        // Strip English overlap with previous input BEFORE sending to model.
+        // Model only receives truly new words → can't produce overlap in translation.
+        let input = Self.trimEnglishOverlap(new: rawInput, previous: lastTranslatedInput)
 
-        lastTranslatedInput = input
+        // Need at least 4 words after stripping
+        guard input.split(separator: " ").count >= 4 else { return }
+
+        lastTranslatedInput = rawInput
         lastTranslationTime = now
 
-        print("[Translate] EN: \"\(input)\"")
+        if input != rawInput {
+            print("[Translate] EN raw: \"\(rawInput)\"")
+            print("[Translate] EN trimmed: \"\(input)\"")
+        } else {
+            print("[Translate] EN: \"\(input)\"")
+        }
 
         if translator == nil {
             guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
@@ -188,7 +193,38 @@ final class SubtitleService {
         }
     }
 
-    // MARK: - Overlap Trimming
+    // MARK: - English Overlap Trimming (before sending to model)
+
+    /// Strip words from the START of `new` that appear at the END of `previous`.
+    /// This removes the sliding-window overlap so the model only translates new content.
+    private static func trimEnglishOverlap(new: String, previous: String) -> String {
+        guard !previous.isEmpty else { return new }
+
+        let newWords = new.split(separator: " ").map(String.init)
+        let prevWords = previous.split(separator: " ").map(String.init)
+        let maxOverlap = min(newWords.count, prevWords.count, 8)
+
+        for overlapLen in stride(from: maxOverlap, through: 2, by: -1) {
+            let prevSuffix = prevWords.suffix(overlapLen)
+            let newPrefix = newWords.prefix(overlapLen)
+
+            let match = zip(prevSuffix, newPrefix).allSatisfy { a, b in
+                a.trimmingCharacters(in: .punctuationCharacters).lowercased() ==
+                b.trimmingCharacters(in: .punctuationCharacters).lowercased()
+            }
+
+            if match {
+                let remaining = Array(newWords.dropFirst(overlapLen))
+                if remaining.count >= 3 {
+                    return remaining.joined(separator: " ")
+                }
+            }
+        }
+
+        return new
+    }
+
+    // MARK: - Russian Overlap Trimming (after model response, backup)
 
     /// Find where the END of `previous` matches the START of `new` and strip it.
     /// "быть ключом к" at end of prev + "быть ключом к квантовой теории" → "квантовой теории"
