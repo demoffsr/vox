@@ -23,6 +23,8 @@ final class SubtitleService {
     private var translationTimer: Task<Void, Never>?
     private var lastTranslationTime: TimeInterval = 0
     private var lastTranslatedInput: String = ""
+    private var lastShownTranslation: String = ""
+    private var lastTranslation: (english: String, russian: String)?
     private var rateLimitUntil: TimeInterval = 0
 
     /// The current subtitle language locale identifier (e.g. "en-US", "ru-RU").
@@ -81,6 +83,8 @@ final class SubtitleService {
         translator = nil
         lastTranslatedInput = ""
         lastTranslationTime = 0
+        lastShownTranslation = ""
+        lastTranslation = nil
 
         captureTask?.cancel()
         captureTask = nil
@@ -102,7 +106,7 @@ final class SubtitleService {
         translationTimer?.cancel()
         let now = Date().timeIntervalSince1970
         let elapsed = now - lastTranslationTime
-        let delay = max(0, 3.0 - elapsed)
+        let delay = max(0, 4.0 - elapsed)
 
         translationTimer = Task {
             if delay > 0 {
@@ -121,8 +125,15 @@ final class SubtitleService {
         let words = subtitlePanel.originalDisplayText.split(separator: " ").map(String.init)
         guard words.count >= 8 else { return }
 
-        let input = words.suffix(15).joined(separator: " ")
+        let input = words.suffix(12).joined(separator: " ")
         guard input != lastTranslatedInput else { return }
+
+        // Skip if too few genuinely new words (< 4) — previous subtitle is still valid
+        if !lastTranslatedInput.isEmpty {
+            let prevSet = Set(lastTranslatedInput.lowercased().split(separator: " "))
+            let newCount = input.lowercased().split(separator: " ").filter { !prevSet.contains($0) }.count
+            guard newCount >= 5 else { return }
+        }
 
         lastTranslatedInput = input
         lastTranslationTime = now
@@ -136,6 +147,7 @@ final class SubtitleService {
         guard let translator else { return }
 
         let model = AppSettings.shared.subtitleTranslationModel
+        let prevTurn = self.lastTranslation
         pendingTranslation?.cancel()
 
         pendingTranslation = Task {
@@ -144,13 +156,25 @@ final class SubtitleService {
                     text: input,
                     language: targetLang,
                     model: model,
+                    previousTurn: prevTurn,
                     onToken: { _ in }
                 )
                 guard !Task.isCancelled else { return }
                 print("[Translate] RU: \"\(result)\"")
 
                 if !result.isEmpty {
-                    self.subtitlePanel.showTranslation(result)
+                    // Skip too-short translations — previous subtitle stays
+                    guard result.split(separator: " ").count >= 5 else {
+                        print("[Translate] TOO SHORT — keeping previous")
+                        return
+                    }
+                    self.lastTranslation = (english: input, russian: result)
+                    let trimmed = Self.trimOverlap(new: result, previous: self.lastShownTranslation)
+                    if trimmed != result {
+                        print("[Translate] Trimmed: \"\(trimmed)\"")
+                    }
+                    self.subtitlePanel.showTranslation(trimmed)
+                    self.lastShownTranslation = trimmed
                     self.throttledWriteIPC(text: result)
                 }
             } catch {
@@ -162,6 +186,47 @@ final class SubtitleService {
                 }
             }
         }
+    }
+
+    // MARK: - Overlap Trimming
+
+    /// Find where the END of `previous` matches the START of `new` and strip it.
+    /// "быть ключом к" at end of prev + "быть ключом к квантовой теории" → "квантовой теории"
+    private static func trimOverlap(new: String, previous: String) -> String {
+        guard !previous.isEmpty else { return new }
+
+        let newWords = new.split(separator: " ").map(String.init)
+        let prevWords = previous.split(separator: " ").map(String.init)
+        let maxOverlap = min(newWords.count, prevWords.count, 8)
+
+        for overlapLen in stride(from: maxOverlap, through: 2, by: -1) {
+            let prevSuffix = prevWords.suffix(overlapLen)
+            let newPrefix = newWords.prefix(overlapLen)
+
+            let match = zip(prevSuffix, newPrefix).allSatisfy { a, b in
+                Self.fuzzyWordMatch(a, b)
+            }
+
+            if match {
+                let remaining = Array(newWords.dropFirst(overlapLen))
+                if remaining.count >= 2 {
+                    return remaining.joined(separator: " ")
+                }
+            }
+        }
+
+        return new
+    }
+
+    /// Fuzzy word comparison: handles Russian grammatical suffixes.
+    /// "глубокой" ≈ "глубокая", "теории" ≈ "теория"
+    private static func fuzzyWordMatch(_ a: String, _ b: String) -> Bool {
+        let aNorm = a.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        let bNorm = b.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        if aNorm == bNorm { return true }
+        guard aNorm.count >= 4, bNorm.count >= 4 else { return false }
+        // Drop last 2 chars to ignore grammatical endings
+        return aNorm.dropLast(2) == bNorm.dropLast(2)
     }
 
     // MARK: - IPC

@@ -59,8 +59,11 @@ enum Constants {
         }
 
         return """
-        Translate to \(lang). Natural spoken style, subtitles.
-        Keep names and technical terms unchanged.
+        /* prompt redacted */ // \(lang).
+        
+        
+        
+        
         
         """
     }

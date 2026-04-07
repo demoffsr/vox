@@ -12,6 +12,7 @@ final class SubtitleTranslator {
         text: String,
         language: TargetLanguage,
         model: ClaudeModel = .haiku,
+        previousTurn: (english: String, russian: String)? = nil,
         onToken: @Sendable @escaping (String) -> Void
     ) async throws -> String {
         var request = URLRequest(url: Constants.apiURL)
@@ -21,14 +22,19 @@ final class SubtitleTranslator {
         request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 15
 
+        var messages: [[String: String]] = []
+        if let prev = previousTurn {
+            messages.append(["role": "user", "content": prev.english])
+            messages.append(["role": "assistant", "content": prev.russian])
+        }
+        messages.append(["role": "user", "content": text])
+
         let body: [String: Any] = [
             "model": model.rawValue,
             "max_tokens": 200,
             "stream": true,
             "system": Constants.subtitleTranslationPrompt(targetLanguage: language),
-            "messages": [
-                ["role": "user", "content": text]
-            ]
+            "messages": messages
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
