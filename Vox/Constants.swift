@@ -79,7 +79,7 @@ enum Constants {
 
 enum ClaudeModel: String, CaseIterable, Identifiable {
     case haiku = "claude-haiku-4-5-20251001"
-    case sonnet = "claude-sonnet-4-6-20260320"
+    case sonnet = "claude-sonnet-4-20250514"
 
     var id: String { rawValue }
 

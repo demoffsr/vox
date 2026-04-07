@@ -155,6 +155,7 @@ final class SubtitleService {
         let prevTurn = self.lastTranslation
         pendingTranslation?.cancel()
 
+        // Previous subtitle stays visible until new one arrives — no flicker
         pendingTranslation = Task {
             do {
                 let result = try await translator.translateStreaming(
@@ -168,18 +169,13 @@ final class SubtitleService {
                 print("[Translate] RU: \"\(result)\"")
 
                 if !result.isEmpty {
-                    // Skip too-short translations — previous subtitle stays
-                    guard result.split(separator: " ").count >= 5 else {
+                    guard result.split(separator: " ").count >= 3 else {
                         print("[Translate] TOO SHORT — keeping previous")
                         return
                     }
                     self.lastTranslation = (english: input, russian: result)
-                    let trimmed = Self.trimOverlap(new: result, previous: self.lastShownTranslation)
-                    if trimmed != result {
-                        print("[Translate] Trimmed: \"\(trimmed)\"")
-                    }
-                    self.subtitlePanel.showTranslation(trimmed)
-                    self.lastShownTranslation = trimmed
+                    self.subtitlePanel.showTranslation(result)
+                    self.lastShownTranslation = result
                     self.throttledWriteIPC(text: result)
                 }
             } catch {
@@ -200,9 +196,14 @@ final class SubtitleService {
     private static func trimEnglishOverlap(new: String, previous: String) -> String {
         guard !previous.isEmpty else { return new }
 
-        let newWords = new.split(separator: " ").map(String.init)
-        let prevWords = previous.split(separator: " ").map(String.init)
-        let maxOverlap = min(newWords.count, prevWords.count, 8)
+        // Filter standalone punctuation tokens ("," "." etc.) — they break overlap matching
+        func realWords(_ text: String) -> [String] {
+            text.split(separator: " ").map(String.init).filter { $0.contains(where: { $0.isLetter }) }
+        }
+
+        let newWords = realWords(new)
+        let prevWords = realWords(previous)
+        let maxOverlap = min(newWords.count, prevWords.count, 10)
 
         for overlapLen in stride(from: maxOverlap, through: 2, by: -1) {
             let prevSuffix = prevWords.suffix(overlapLen)

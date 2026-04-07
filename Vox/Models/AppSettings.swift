@@ -53,8 +53,8 @@ final class AppSettings {
 
     var subtitleTranslationModel: ClaudeModel {
         get {
-            let raw = UserDefaults.standard.string(forKey: "subtitleTranslationModel") ?? ClaudeModel.haiku.rawValue
-            return ClaudeModel(rawValue: raw) ?? .haiku
+            let raw = UserDefaults.standard.string(forKey: "subtitleTranslationModel") ?? ClaudeModel.sonnet.rawValue
+            return ClaudeModel(rawValue: raw) ?? .sonnet
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: "subtitleTranslationModel")
