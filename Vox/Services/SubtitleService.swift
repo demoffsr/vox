@@ -221,7 +221,23 @@ final class SubtitleService {
                     self.lastTranslation = (english: input, russian: result)
 
                     if let vm = self.streamViewModel {
-                        vm.append(result)
+                        if let chunkIndex = vm.append(result) {
+                            // Background cleanup — raw chunk is already visible
+                            let context = vm.context(beforeIndex: chunkIndex)
+                            Task {
+                                guard let translator = self.translator else { return }
+                                if let cleaned = await translator.cleanup(
+                                    text: result,
+                                    context: context,
+                                    language: targetLang
+                                ) {
+                                    await MainActor.run {
+                                        vm.replaceChunk(at: chunkIndex, with: cleaned)
+                                        print("[Cleanup] \"\(result)\" → \"\(cleaned)\"")
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         self.subtitlePanel.showTranslation(result)
                     }
