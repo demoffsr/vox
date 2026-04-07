@@ -3,73 +3,77 @@ import Testing
 
 @MainActor
 struct TranslationStreamViewModelTests {
-    @Test func appendReturnsIndexAndBuildsText() {
+    @Test func appendAddsToPendingChunks() {
         let vm = TranslationStreamViewModel()
-        let i0 = vm.append("Hello world")
-        let i1 = vm.append("second chunk")
-        #expect(i0 == 0)
-        #expect(i1 == 1)
+        vm.append("Hello world")
+        vm.append("second chunk")
         #expect(vm.accumulatedText == "Hello world second chunk")
+        #expect(vm.pendingChunksCount == 2)
     }
 
     @Test func appendSkipsEmptyText() {
         let vm = TranslationStreamViewModel()
-        let i0 = vm.append("first")
-        let i1 = vm.append("")
-        let i2 = vm.append("  ")
-        #expect(i0 == 0)
-        #expect(i1 == nil)
-        #expect(i2 == nil)
+        vm.append("first")
+        vm.append("")
+        vm.append("  ")
         #expect(vm.accumulatedText == "first")
+        #expect(vm.pendingChunksCount == 1)
     }
 
-    @Test func clearResetsChunks() {
+    @Test func clearResetsEverything() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("some text")
+        vm.append("some text")
+        vm.commitRefinedText("Refined text.")
+        vm.append("more")
         vm.clear()
         #expect(vm.accumulatedText == "")
+        #expect(vm.pendingChunksCount == 0)
     }
 
-    @Test func firstAppendHasNoLeadingSpace() {
+    @Test func accumulatedTextCombinesRefinedAndPending() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("first chunk")
-        #expect(vm.accumulatedText == "first chunk")
+        vm.append("raw one")
+        vm.append("raw two")
+        vm.commitRefinedText("Refined one. Refined two.")
+        vm.append("raw three")
+        #expect(vm.accumulatedText == "Refined one. Refined two. raw three")
+        #expect(vm.pendingChunksCount == 1)
     }
 
-    @Test func replaceChunkUpdatesText() {
+    @Test func commitRefinedTextClearsPendingChunks() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("hello world")
-        let i1 = vm.append("second chunk")
-        vm.replaceChunk(at: i1!, with: "Second chunk.")
-        #expect(vm.accumulatedText == "hello world Second chunk.")
+        vm.append("chunk a")
+        vm.append("chunk b")
+        #expect(vm.pendingChunksCount == 2)
+        vm.commitRefinedText("Chunk A. Chunk B.")
+        #expect(vm.pendingChunksCount == 0)
+        #expect(vm.accumulatedText == "Chunk A. Chunk B.")
     }
 
-    @Test func replaceChunkIgnoresInvalidIndex() {
+    @Test func pendingTextReturnsPendingChunksJoined() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("hello")
-        vm.replaceChunk(at: 5, with: "nope")
-        #expect(vm.accumulatedText == "hello")
+        vm.append("one")
+        vm.append("two")
+        vm.append("three")
+        #expect(vm.pendingText == "one two three")
     }
 
-    @Test func contextReturnsLastWords() {
+    @Test func refinedTailReturnsLastWords() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("one two three four five")
-        _ = vm.append("six seven eight nine ten")
-        let ctx = vm.context(beforeIndex: 2, maxWords: 6)
-        #expect(ctx == "five six seven eight nine ten")
+        vm.commitRefinedText("one two three four five six seven eight")
+        let tail = vm.refinedTail(maxWords: 4)
+        #expect(tail == "five six seven eight")
     }
 
-    @Test func contextClampsToAvailableWords() {
+    @Test func refinedTailReturnsEmptyWhenNoRefined() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("hello world")
-        let ctx = vm.context(beforeIndex: 1, maxWords: 100)
-        #expect(ctx == "hello world")
+        vm.append("pending only")
+        #expect(vm.refinedTail(maxWords: 30) == "")
     }
 
-    @Test func contextReturnsEmptyForFirstChunk() {
+    @Test func refinedTailClampsToAvailable() {
         let vm = TranslationStreamViewModel()
-        _ = vm.append("first")
-        let ctx = vm.context(beforeIndex: 0, maxWords: 30)
-        #expect(ctx == "")
+        vm.commitRefinedText("hello world")
+        #expect(vm.refinedTail(maxWords: 100) == "hello world")
     }
 }

@@ -3,41 +3,61 @@ import SwiftUI
 @Observable
 @MainActor
 final class TranslationStreamViewModel {
-    private(set) var chunks: [String] = []
+    private var refinedText: String = ""
+    private var pendingChunks: [String] = []
     var isActive: Bool = false
     var selectedLanguage: TargetLanguage = .russian
 
+    /// Full display text: refined prefix + pending raw chunks.
     var accumulatedText: String {
-        chunks.joined(separator: " ")
+        if refinedText.isEmpty {
+            return pendingChunks.joined(separator: " ")
+        } else if pendingChunks.isEmpty {
+            return refinedText
+        } else {
+            return refinedText + " " + pendingChunks.joined(separator: " ")
+        }
     }
 
-    /// Append a translated chunk. Returns the chunk index, or nil if text was empty.
+    /// Number of chunks waiting to be refined.
+    var pendingChunksCount: Int { pendingChunks.count }
+
+    /// The pending chunks joined as a single string (sent to refine API).
+    var pendingText: String {
+        pendingChunks.joined(separator: " ")
+    }
+
+    /// Append a raw translated chunk. Returns the new pending count.
     @discardableResult
-    func append(_ text: String) -> Int? {
+    func append(_ text: String) -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        chunks.append(trimmed)
-        return chunks.count - 1
+        guard !trimmed.isEmpty else { return pendingChunks.count }
+        pendingChunks.append(trimmed)
+        return pendingChunks.count
     }
 
-    /// Replace a chunk at the given index (used by cleanup post-processing).
-    func replaceChunk(at index: Int, with text: String) {
-        guard index >= 0, index < chunks.count else { return }
+    /// Replace all pending chunks with refined text.
+    func commitRefinedText(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        chunks[index] = trimmed
+        if refinedText.isEmpty {
+            refinedText = trimmed
+        } else {
+            refinedText += " " + trimmed
+        }
+        pendingChunks.removeAll()
     }
 
-    /// Get the last N words from chunks before the given index (for cleanup context).
-    func context(beforeIndex index: Int, maxWords: Int = 30) -> String {
-        guard index > 0 else { return "" }
-        let preceding = chunks[0..<index].joined(separator: " ")
-        let words = preceding.split(separator: " ")
+    /// Get the last N words of refined text (for context in refine API call).
+    func refinedTail(maxWords: Int = 30) -> String {
+        guard !refinedText.isEmpty else { return "" }
+        let words = refinedText.split(separator: " ")
         return words.suffix(maxWords).joined(separator: " ")
     }
 
     func clear() {
-        chunks.removeAll()
+        refinedText = ""
+        pendingChunks.removeAll()
     }
 
     func copyAll() {
