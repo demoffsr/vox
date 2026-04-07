@@ -71,7 +71,25 @@ final class SubtitleTranslator {
             }
         }
 
-        return fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var result = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Strip model reasoning that leaked into output (e.g. "Wait, I need to...")
+        // If translating to a non-English language, drop lines that are clearly English meta-text.
+        if language != .english {
+            let lines = result.components(separatedBy: "\n")
+            let filtered = lines.filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                // Drop empty lines and lines that look like English reasoning
+                if trimmed.isEmpty { return false }
+                let looksEnglish = trimmed.hasPrefix("Wait") || trimmed.hasPrefix("Note:") ||
+                    trimmed.hasPrefix("I need") || trimmed.hasPrefix("The correct") ||
+                    trimmed.hasPrefix("Let me")
+                return !looksEnglish
+            }
+            result = filtered.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return result
     }
 
     /// Post-process a batch of translated text: fix punctuation, capitalization, sentence breaks.

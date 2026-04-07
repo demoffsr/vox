@@ -128,6 +128,18 @@ enum SubtitleLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    var languageCode: String {
+        switch self {
+        case .english:  return "en"
+        case .russian:  return "ru"
+        case .spanish:  return "es"
+        case .french:   return "fr"
+        case .german:   return "de"
+        case .chinese:  return "zh"
+        case .japanese: return "ja"
+        }
+    }
+
     var localeLanguage: Locale.Language {
         switch self {
         case .english:  return .init(identifier: "en")

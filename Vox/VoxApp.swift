@@ -1,12 +1,23 @@
 import SwiftUI
+import Speech
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = AppCoordinator()
     let subtitleService = SubtitleService()
     private var settingsWindow: NSWindow?
+    /// Installed speech recognition locales (loaded at launch).
+    var installedLocales: Set<String> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Load installed speech locales for the Subtitle Language menu
+        Task {
+            let dictLocales = await DictationTranscriber.installedLocales
+            let speechLocales = await SpeechTranscriber.installedLocales
+            let allCodes = (dictLocales + speechLocales).compactMap { $0.language.languageCode?.identifier }
+            self.installedLocales = Set(allCodes)
+            print("[Vox] Installed speech locales — Dictation: \(dictLocales.map(\.identifier)), SpeechTranscriber: \(speechLocales.map(\.identifier))")
+        }
         // Register this object as the Services provider
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -92,9 +103,33 @@ struct VoxApp: App {
                 }
             }
             Menu("Subtitle Language") {
-                ForEach(SubtitleLanguage.allCases) { lang in
-                    Button("\(lang.flag) \(lang.displayName)") {
+                let currentLang = AppSettings.shared.subtitleLanguage
+                let installed = appDelegate.installedLocales
+                let availableLanguages = SubtitleLanguage.allCases.filter { lang in
+                    installed.isEmpty || installed.contains(lang.languageCode)
+                }
+                ForEach(availableLanguages) { lang in
+                    Button {
                         AppSettings.shared.subtitleLanguage = lang
+                        appDelegate.subtitleService.subtitleLocale = lang.locale
+                        if appDelegate.subtitleService.isRunning {
+                            Task {
+                                await appDelegate.subtitleService.stop()
+                                await appDelegate.subtitleService.start()
+                            }
+                        }
+                    } label: {
+                        let check = lang == currentLang ? "✓ " : "   "
+                        Text("\(check)\(lang.flag) \(lang.displayName)")
+                    }
+                }
+                if availableLanguages.count < SubtitleLanguage.allCases.count {
+                    Divider()
+                    Button("Add more languages...") {
+                        // Open Keyboard settings where Dictation languages are configured
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
                     }
                 }
             }

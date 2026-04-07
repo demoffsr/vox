@@ -29,6 +29,7 @@ final class SubtitleService {
     private var refineIdleTimer: Task<Void, Never>?
     private var isRefining = false
     private var vocabularyUpdateCounter = 0
+    private var isFirstTranslation = true
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -125,6 +126,7 @@ final class SubtitleService {
         refineIdleTimer = nil
         isRefining = false
         vocabularyUpdateCounter = 0
+        isFirstTranslation = true
         translator = nil
         lastTranslatedInput = ""
         lastTranslationTime = 0
@@ -203,7 +205,10 @@ final class SubtitleService {
         }
         guard let translator else { return }
 
-        let model = AppSettings.shared.subtitleTranslationModel
+        // First translation uses Sonnet (better ASR error correction with context),
+        // subsequent ones use Haiku (fast)
+        let model: ClaudeModel = isFirstTranslation ? .sonnet : .haiku
+        isFirstTranslation = false
         let prevTurn = self.lastTranslation
         pendingTranslation?.cancel()
 

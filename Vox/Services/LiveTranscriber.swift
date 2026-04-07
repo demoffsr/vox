@@ -66,10 +66,11 @@ final class LiveTranscriber: @unchecked Sendable {
     func start(locale: Locale = Locale(identifier: "en-US"), forTranslation: Bool = false) async {
         guard !isRunning else { return }
 
-        let module: any SpeechModule
+        var module: any SpeechModule
+        var useSpeechTranscriber = forTranslation
 
-        if forTranslation {
-            // SpeechTranscriber — optimized for transcription accuracy, not display
+        // Try SpeechTranscriber first (better accuracy), fall back to DictationTranscriber if unavailable
+        if useSpeechTranscriber {
             let transcriber = SpeechTranscriber(
                 locale: locale,
                 preset: .progressiveTranscription
@@ -80,7 +81,6 @@ final class LiveTranscriber: @unchecked Sendable {
             self.speechTranscriber = transcriber
             lock.unlock()
         } else {
-            // DictationTranscriber — pretty output with punctuation for on-screen subtitles
             let transcriber = DictationTranscriber(
                 locale: locale,
                 contentHints: [],
@@ -95,11 +95,35 @@ final class LiveTranscriber: @unchecked Sendable {
             lock.unlock()
         }
 
-        // Get the audio format the engine wants
-        guard let bestFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
-            compatibleWith: [module]
-        ) else {
-            print("[LiveTranscriber] Could not get compatible audio format")
+        // Get the audio format — if SpeechTranscriber fails (model not installed), fall back
+        var bestFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module])
+
+        if bestFormat == nil && useSpeechTranscriber {
+            print("[LiveTranscriber] SpeechTranscriber unavailable for \(locale.identifier), falling back to DictationTranscriber")
+            useSpeechTranscriber = false
+
+            lock.lock()
+            self.speechTranscriber = nil
+            lock.unlock()
+
+            let transcriber = DictationTranscriber(
+                locale: locale,
+                contentHints: [],
+                transcriptionOptions: [.punctuation],
+                reportingOptions: [.volatileResults],
+                attributeOptions: []
+            )
+            module = transcriber
+
+            lock.lock()
+            self.dictationTranscriber = transcriber
+            lock.unlock()
+
+            bestFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module])
+        }
+
+        guard let bestFormat else {
+            print("[LiveTranscriber] Could not get compatible audio format for \(locale.identifier)")
             return
         }
 
@@ -128,7 +152,7 @@ final class LiveTranscriber: @unchecked Sendable {
 
         // Listen for results — volatile (word-by-word) and final (confirmed)
         let callback = self.onSubtitle
-        if forTranslation {
+        if useSpeechTranscriber {
             let transcriber = self.speechTranscriber!
             resultsTask = Task.detached { [weak self] in
                 do {
@@ -162,7 +186,7 @@ final class LiveTranscriber: @unchecked Sendable {
             }
         }
 
-        let moduleName = forTranslation ? "SpeechTranscriber" : "DictationTranscriber"
+        let moduleName = useSpeechTranscriber ? "SpeechTranscriber" : "DictationTranscriber"
         print("[LiveTranscriber] Started — \(moduleName), locale: \(locale.identifier), format: \(bestFormat)")
     }
 
