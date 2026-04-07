@@ -148,6 +148,20 @@ final class SubtitlePanel: NSPanel {
         }
     }
 
+    /// Accumulate final words without showing the panel. Used when translation stream is active.
+    func accumulateFinal(_ text: String) {
+        confirmedWords += text.split(separator: " ").map(String.init)
+        volatileText = ""
+        if confirmedWords.count > 60 {
+            confirmedWords = Array(confirmedWords.suffix(30))
+        }
+    }
+
+    /// Accumulate volatile text without showing the panel. Used when translation stream is active.
+    func accumulateVolatile(_ text: String) {
+        volatileText = text
+    }
+
     /// Set translation text directly (no streaming). Updates label immediately.
     func showTranslation(_ text: String) {
         translationOverride = text
