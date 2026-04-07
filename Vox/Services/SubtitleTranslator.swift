@@ -73,4 +73,70 @@ final class SubtitleTranslator {
 
         return fullText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Post-process a translated chunk: fix punctuation, capitalization, sentence breaks.
+    /// Uses Haiku for speed. Returns cleaned text, or nil on failure.
+    func cleanup(text: String, context: String, language: TargetLanguage) async -> String? {
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 3
+
+        let langName: String
+        switch language {
+        case .auto, .russian: langName = "Russian"
+        case .english: langName = "English"
+        case .spanish: langName = "Spanish"
+        case .french: langName = "French"
+        case .german: langName = "German"
+        case .chinese: langName = "Simplified Chinese"
+        case .japanese: langName = "Japanese"
+        }
+
+        let system = """
+        /* prompt redacted */ \(langName) subtitle translations. You receive a context (previous text) and a new chunk.
+        Fix the new chunk ONLY:
+        - Proper punctuation (commas, periods, question marks)
+        - Capitalize first word if it starts a new sentence
+        - Keep meaning exactly the same — do not add, remove, or rephrase words
+        - If the chunk continues mid-sentence from context, do NOT capitalize the first word
+        - Output ONLY the cleaned chunk, nothing else
+        """
+
+        var userContent = ""
+        if !context.isEmpty {
+            userContent += "Context: \(context)\n\n"
+        }
+        userContent += "New chunk: \(text)"
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.haiku.rawValue,
+            "max_tokens": 200,
+            "stream": false,
+            "system": system,
+            "messages": [["role": "user", "content": userContent]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? nil : cleaned
+        } catch {
+            print("[Cleanup] FAILED: \(error)")
+            return nil
+        }
+    }
 }
