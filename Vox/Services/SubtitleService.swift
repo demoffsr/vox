@@ -221,22 +221,10 @@ final class SubtitleService {
                     self.lastTranslation = (english: input, russian: result)
 
                     if let vm = self.streamViewModel {
-                        if let chunkIndex = vm.append(result) {
-                            // Background cleanup — raw chunk is already visible
-                            let context = vm.context(beforeIndex: chunkIndex)
-                            Task {
-                                guard let translator = self.translator else { return }
-                                if let cleaned = await translator.cleanup(
-                                    text: result,
-                                    context: context,
-                                    language: targetLang
-                                ) {
-                                    await MainActor.run {
-                                        vm.replaceChunk(at: chunkIndex, with: cleaned)
-                                        print("[Cleanup] \"\(result)\" → \"\(cleaned)\"")
-                                    }
-                                }
-                            }
+                        let pendingCount = vm.append(result)
+                        // Trigger batch refine every 3 pending chunks
+                        if pendingCount >= 3 {
+                            self.triggerBatchRefine(language: targetLang)
                         }
                     } else {
                         self.subtitlePanel.showTranslation(result)
@@ -250,6 +238,28 @@ final class SubtitleService {
                     print("[Translate] RATE LIMITED — 30s")
                 } else if !(error is CancellationError) {
                     print("[Translate] FAILED: \(error)")
+                }
+            }
+        }
+    }
+
+    private func triggerBatchRefine(language: TargetLanguage) {
+        guard let vm = streamViewModel, let translator = translator else { return }
+        let textToRefine = vm.pendingText
+        let context = vm.refinedTail(maxWords: 30)
+        guard !textToRefine.isEmpty else { return }
+
+        print("[Refine] Sending \(vm.pendingChunksCount) chunks for cleanup")
+
+        Task {
+            if let cleaned = await translator.cleanup(
+                text: textToRefine,
+                context: context,
+                language: language
+            ) {
+                await MainActor.run {
+                    vm.commitRefinedText(cleaned)
+                    print("[Refine] \"\(textToRefine)\" → \"\(cleaned)\"")
                 }
             }
         }

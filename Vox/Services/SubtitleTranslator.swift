@@ -74,7 +74,7 @@ final class SubtitleTranslator {
         return fullText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Post-process a translated chunk: fix punctuation, capitalization, sentence breaks.
+    /// Post-process a batch of translated text: fix punctuation, capitalization, sentence breaks.
     /// Uses Haiku for speed. Returns cleaned text, or nil on failure.
     func cleanup(text: String, context: String, language: TargetLanguage) async -> String? {
         var request = URLRequest(url: Constants.apiURL)
@@ -82,7 +82,7 @@ final class SubtitleTranslator {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
-        request.timeoutInterval = 3
+        request.timeoutInterval = 5
 
         let langName: String
         switch language {
@@ -96,24 +96,25 @@ final class SubtitleTranslator {
         }
 
         let system = """
-        /* prompt redacted */ \(langName) subtitle translations. You receive a context (previous text) and a new chunk.
-        Fix the new chunk ONLY:
-        - Proper punctuation (commas, periods, question marks)
-        - Capitalize first word if it starts a new sentence
+        /* prompt redacted */ \(langName) 
+        Fix the new text ONLY:
+        - Add proper punctuation: commas, periods, question marks where sentences end
+        - 
+        - If the new text continues mid-sentence from context, do NOT capitalize the first word
+        - Split run-on text into proper sentences
         - Keep meaning exactly the same — do not add, remove, or rephrase words
-        - If the chunk continues mid-sentence from context, do NOT capitalize the first word
-        - Output ONLY the cleaned chunk, nothing else
+        - 
         """
 
         var userContent = ""
         if !context.isEmpty {
-            userContent += "Context: \(context)\n\n"
+            userContent += "Context (previous text): \(context)\n\n"
         }
-        userContent += "New chunk: \(text)"
+        userContent += "New text to clean up: \(text)"
 
         let body: [String: Any] = [
             "model": ClaudeModel.haiku.rawValue,
-            "max_tokens": 200,
+            "max_tokens": 400,
             "stream": false,
             "system": system,
             "messages": [["role": "user", "content": userContent]]
