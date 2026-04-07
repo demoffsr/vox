@@ -56,7 +56,9 @@ final class SubtitleService {
                         self.subtitlePanel.showVolatile(text)
                     }
                 }
-                self.throttledWriteIPC(text: self.subtitlePanel.displayText)
+                if !translationActive {
+                    self.throttledWriteIPC(text: self.subtitlePanel.displayText)
+                }
                 if translationActive {
                     self.onNewWords()
                 }
@@ -122,8 +124,9 @@ final class SubtitleService {
         lastShownTranslation = ""
         lastTranslation = nil
 
-        // Dismiss translation stream
+        // Dismiss translation stream (nil onClose to prevent re-entrant stop)
         streamViewModel?.isActive = false
+        streamPanel?.onClose = nil
         streamPanel?.dismiss()
         streamViewModel = nil
         streamPanel = nil

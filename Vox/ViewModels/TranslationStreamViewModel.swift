@@ -23,6 +23,7 @@ final class TranslationStreamViewModel {
     }
 
     func copyAll() {
+        guard !accumulatedText.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(accumulatedText, forType: .string)
     }
