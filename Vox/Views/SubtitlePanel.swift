@@ -27,12 +27,32 @@ final class SubtitlePanel: NSPanel {
     private let originalFont = NSFont.systemFont(ofSize: 14, weight: .regular)
     private static let panelWidth: CGFloat = 620
 
-    /// Original (untranslated) text from transcriber — used as translation input.
+    /// Original (untranslated) text from transcriber — includes volatile (partial) words.
     var originalDisplayText: String {
         var all = confirmedWords.joined(separator: " ")
         if !volatileText.isEmpty {
             if !all.isEmpty { all += " " }
             all += volatileText
+        }
+        return all
+    }
+
+    /// Text safe for translation: all confirmed words + volatile text minus
+    /// the last volatile word (which may be an incomplete fragment like "quant").
+    /// Confirmed words are always complete; only volatile tail risks fragments.
+    var textForTranslation: String {
+        var all = confirmedWords.joined(separator: " ")
+        if !volatileText.isEmpty {
+            var volatileWords = volatileText.split(separator: " ").map(String.init)
+            // Strip last volatile word — may be an incomplete fragment
+            if !volatileWords.isEmpty {
+                volatileWords.removeLast()
+            }
+            let safeVolatile = volatileWords.joined(separator: " ")
+            if !safeVolatile.isEmpty {
+                if !all.isEmpty { all += " " }
+                all += safeVolatile
+            }
         }
         return all
     }

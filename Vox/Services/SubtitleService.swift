@@ -49,16 +49,6 @@ final class SubtitleService {
                     // Accumulate words for overlap trimming, but don't show SubtitlePanel
                     if isFinal {
                         self.subtitlePanel.accumulateFinal(text)
-                        // Feed confirmed vocabulary back to the recognizer
-                        self.vocabularyUpdateCounter += 1
-                        if self.vocabularyUpdateCounter % 5 == 0 {
-                            let allWords = self.subtitlePanel.originalDisplayText
-                                .split(separator: " ")
-                                .map { $0.trimmingCharacters(in: .punctuationCharacters).lowercased() }
-                                .filter { $0.count >= 4 }
-                            let unique = Array(Set(allWords))
-                            self.transcriber.updateVocabulary(unique)
-                        }
                     } else {
                         self.subtitlePanel.accumulateVolatile(text)
                     }
@@ -78,7 +68,7 @@ final class SubtitleService {
             }
         }
 
-        await transcriber.start(locale: subtitleLocale)
+        await transcriber.start(locale: subtitleLocale, forTranslation: translationActive)
 
         let preferredFormat = transcriber.preferredAudioFormat
         print("[SubtitleService] SpeechAnalyzer wants format: \(preferredFormat?.description ?? "nil")")
@@ -162,7 +152,7 @@ final class SubtitleService {
 
     private func onNewWords() {
         guard AppSettings.shared.subtitleTranslationLanguage != nil else { return }
-        guard subtitlePanel.originalDisplayText.split(separator: " ").count >= 8 else { return }
+        guard subtitlePanel.textForTranslation.split(separator: " ").count >= 8 else { return }
 
         // Schedule translation after 3s cooldown
         translationTimer?.cancel()
@@ -184,7 +174,7 @@ final class SubtitleService {
         let now = Date().timeIntervalSince1970
         if now < rateLimitUntil { return }
 
-        let words = subtitlePanel.originalDisplayText.split(separator: " ").map(String.init)
+        let words = subtitlePanel.textForTranslation.split(separator: " ").map(String.init)
         guard words.count >= 8 else { return }
 
         let rawInput = words.suffix(12).joined(separator: " ")

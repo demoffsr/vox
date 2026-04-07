@@ -2,10 +2,11 @@ import Speech
 import AVFoundation
 import Accelerate
 
-/// Streaming speech-to-text using DictationTranscriber + SpeechAnalyzer (macOS 26+).
-/// Uses DictationTranscriber (NOT SpeechTranscriber) — optimized for real-time live captions.
-/// Preprocesses audio (high-pass filter + RMS normalization) to improve recognition of
-/// music, rap, and other content where vocals compete with instrumentals.
+/// Streaming speech-to-text using SpeechAnalyzer (macOS 26+).
+/// Two modes:
+/// - Subtitles: DictationTranscriber — pretty output with punctuation for display
+/// - Translation: SpeechTranscriber — optimized for transcription accuracy
+/// Preprocesses audio (band-pass filter + pre-emphasis + speech gate + RMS normalization).
 final class LiveTranscriber: @unchecked Sendable {
 
     // MARK: - State (protected by lock)
@@ -13,6 +14,7 @@ final class LiveTranscriber: @unchecked Sendable {
     private let lock = NSLock()
     private var analyzer: SpeechAnalyzer?
     private var dictationTranscriber: DictationTranscriber?
+    private var speechTranscriber: SpeechTranscriber?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<Void, Never>?
     private var _targetFormat: AVAudioFormat?
@@ -57,40 +59,57 @@ final class LiveTranscriber: @unchecked Sendable {
 
     // MARK: - Public API
 
+    /// Start transcription.
+    /// - `forTranslation: false` — DictationTranscriber (pretty subtitles with punctuation)
+    /// - `forTranslation: true` — SpeechTranscriber (accuracy-optimized for translation input)
     @MainActor
-    func start(locale: Locale = Locale(identifier: "en-US")) async {
+    func start(locale: Locale = Locale(identifier: "en-US"), forTranslation: Bool = false) async {
         guard !isRunning else { return }
 
-        // DictationTranscriber — real-time dictation engine, NOT batch transcription
-        // - contentHints: empty — audio is digital (ScreenCaptureKit), NOT far-field mic
-        // - .volatileResults: emit partial results (word by word)
-        // - .punctuation: auto-add punctuation
-        // Note: .frequentFinalization removed to allow more context before finalizing
-        //       (improves accuracy for fast speech/rap at cost of ~200-500ms latency)
-        let dictTranscriber = DictationTranscriber(
-            locale: locale,
-            contentHints: [],
-            transcriptionOptions: [.punctuation],
-            reportingOptions: [.volatileResults],
-            attributeOptions: []
-        )
+        let module: any SpeechModule
+
+        if forTranslation {
+            // SpeechTranscriber — optimized for transcription accuracy, not display
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                preset: .progressiveTranscription
+            )
+            module = transcriber
+
+            lock.lock()
+            self.speechTranscriber = transcriber
+            lock.unlock()
+        } else {
+            // DictationTranscriber — pretty output with punctuation for on-screen subtitles
+            let transcriber = DictationTranscriber(
+                locale: locale,
+                contentHints: [],
+                transcriptionOptions: [.punctuation],
+                reportingOptions: [.volatileResults],
+                attributeOptions: []
+            )
+            module = transcriber
+
+            lock.lock()
+            self.dictationTranscriber = transcriber
+            lock.unlock()
+        }
 
         // Get the audio format the engine wants
         guard let bestFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
-            compatibleWith: [dictTranscriber]
+            compatibleWith: [module]
         ) else {
             print("[LiveTranscriber] Could not get compatible audio format")
             return
         }
 
-        let speechAnalyzer = SpeechAnalyzer(modules: [dictTranscriber])
+        let speechAnalyzer = SpeechAnalyzer(modules: [module])
 
         // Create input stream
         let (inputStream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
 
         lock.lock()
         self.analyzer = speechAnalyzer
-        self.dictationTranscriber = dictTranscriber
         self.inputContinuation = continuation
         self._targetFormat = bestFormat
         self._isRunning = true
@@ -109,24 +128,42 @@ final class LiveTranscriber: @unchecked Sendable {
 
         // Listen for results — volatile (word-by-word) and final (confirmed)
         let callback = self.onSubtitle
-        resultsTask = Task.detached { [weak self] in
-            do {
-                for try await result in dictTranscriber.results {
-                    guard let self, self.isRunning else { break }
-                    let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty {
-                        let isFinal = result.isFinal
-                        await MainActor.run {
-                            callback?(text, isFinal)
+        if forTranslation {
+            let transcriber = self.speechTranscriber!
+            resultsTask = Task.detached { [weak self] in
+                do {
+                    for try await result in transcriber.results {
+                        guard let self, self.isRunning else { break }
+                        let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !text.isEmpty {
+                            let isFinal = result.isFinal
+                            await MainActor.run { callback?(text, isFinal) }
                         }
                     }
+                } catch {
+                    print("[LiveTranscriber] Results stream error: \(error)")
                 }
-            } catch {
-                print("[LiveTranscriber] Results stream error: \(error)")
+            }
+        } else {
+            let transcriber = self.dictationTranscriber!
+            resultsTask = Task.detached { [weak self] in
+                do {
+                    for try await result in transcriber.results {
+                        guard let self, self.isRunning else { break }
+                        let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !text.isEmpty {
+                            let isFinal = result.isFinal
+                            await MainActor.run { callback?(text, isFinal) }
+                        }
+                    }
+                } catch {
+                    print("[LiveTranscriber] Results stream error: \(error)")
+                }
             }
         }
 
-        print("[LiveTranscriber] Started — DictationTranscriber, locale: \(locale.identifier), format: \(bestFormat)")
+        let moduleName = forTranslation ? "SpeechTranscriber" : "DictationTranscriber"
+        print("[LiveTranscriber] Started — \(moduleName), locale: \(locale.identifier), format: \(bestFormat)")
     }
 
     /// Feed audio buffer. Thread-safe. Handles format conversion with cached converter.
@@ -212,6 +249,7 @@ final class LiveTranscriber: @unchecked Sendable {
         resultsTask = nil
         analyzer = nil
         dictationTranscriber = nil
+        speechTranscriber = nil
         _targetFormat = nil
         cachedConverter = nil
         cachedSourceFormat = nil
