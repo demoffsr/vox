@@ -28,6 +28,7 @@ final class SubtitleService {
     private var rateLimitUntil: TimeInterval = 0
     private var refineIdleTimer: Task<Void, Never>?
     private var isRefining = false
+    private var vocabularyUpdateCounter = 0
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -48,6 +49,16 @@ final class SubtitleService {
                     // Accumulate words for overlap trimming, but don't show SubtitlePanel
                     if isFinal {
                         self.subtitlePanel.accumulateFinal(text)
+                        // Feed confirmed vocabulary back to the recognizer
+                        self.vocabularyUpdateCounter += 1
+                        if self.vocabularyUpdateCounter % 5 == 0 {
+                            let allWords = self.subtitlePanel.originalDisplayText
+                                .split(separator: " ")
+                                .map { $0.trimmingCharacters(in: .punctuationCharacters).lowercased() }
+                                .filter { $0.count >= 4 }
+                            let unique = Array(Set(allWords))
+                            self.transcriber.updateVocabulary(unique)
+                        }
                     } else {
                         self.subtitlePanel.accumulateVolatile(text)
                     }
@@ -123,6 +134,7 @@ final class SubtitleService {
         refineIdleTimer?.cancel()
         refineIdleTimer = nil
         isRefining = false
+        vocabularyUpdateCounter = 0
         translator = nil
         lastTranslatedInput = ""
         lastTranslationTime = 0

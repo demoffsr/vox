@@ -29,6 +29,16 @@ final class LiveTranscriber: @unchecked Sendable {
     private var hpA1: Float = 0, hpA2: Float = 0
     private var hpConfiguredRate: Double = 0
 
+    // Low-pass filter state (Butterworth 2nd order, 8 kHz cutoff)
+    private var lpX1: Float = 0, lpX2: Float = 0
+    private var lpY1: Float = 0, lpY2: Float = 0
+    private var lpB0: Float = 0, lpB1: Float = 0, lpB2: Float = 0
+    private var lpA1: Float = 0, lpA2: Float = 0
+    private var lpConfiguredRate: Double = 0
+
+    // Pre-emphasis state
+    private var preEmphPrev: Float = 0
+
     var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -174,6 +184,23 @@ final class LiveTranscriber: @unchecked Sendable {
         }
     }
 
+    /// Feed vocabulary hints back to the recognizer to bias it toward known words.
+    /// Best-effort — errors are silently ignored.
+    func updateVocabulary(_ words: [String]) {
+        lock.lock()
+        let currentAnalyzer = analyzer
+        lock.unlock()
+
+        guard let currentAnalyzer else { return }
+
+        Task {
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = words
+            try? await currentAnalyzer.setContext(context)
+            print("[Vocabulary] Updated with \(words.count) words")
+        }
+    }
+
     @MainActor
     func stop() {
         lock.lock()
@@ -190,6 +217,9 @@ final class LiveTranscriber: @unchecked Sendable {
         cachedSourceFormat = nil
         hpX1 = 0; hpX2 = 0; hpY1 = 0; hpY2 = 0
         hpConfiguredRate = 0
+        lpX1 = 0; lpX2 = 0; lpY1 = 0; lpY2 = 0
+        lpConfiguredRate = 0
+        preEmphPrev = 0
         lock.unlock()
 
         task?.cancel()
@@ -198,7 +228,8 @@ final class LiveTranscriber: @unchecked Sendable {
 
     // MARK: - Audio Preprocessing
 
-    /// High-pass filter + RMS normalization to improve transcription of music/noisy audio.
+    /// Band-pass filter + pre-emphasis + noise gate + RMS normalization
+    /// to improve speech recognition quality.
     private func preprocessAudio(_ buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData else { return }
         let count = Int(buffer.frameLength)
@@ -206,6 +237,9 @@ final class LiveTranscriber: @unchecked Sendable {
 
         let samples = channelData[0]
         applyHighPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
+        applyLowPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
+        applyPreEmphasis(samples, count: count)
+        guard passesSpeechGate(samples, count: count) else { return }
         applyRMSNormalization(samples, count: count)
     }
 
@@ -234,6 +268,56 @@ final class LiveTranscriber: @unchecked Sendable {
             hpY2 = hpY1; hpY1 = y
             samples[i] = y
         }
+    }
+
+    /// Butterworth 2nd-order low-pass at 8 kHz — removes high-frequency noise (cymbals, hiss, artifacts)
+    /// that carries no speech information but can confuse the recognizer.
+    private func applyLowPassFilter(_ samples: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
+        if sampleRate != lpConfiguredRate {
+            let omega = 2.0 * .pi * 8000.0 / sampleRate
+            let cosW = cos(omega)
+            let alpha = sin(omega) / sqrt(2.0) // Q = 1/√2 (Butterworth)
+            let a0 = 1.0 + alpha
+
+            lpB0 = Float((1.0 - cosW) / 2.0 / a0)
+            lpB1 = Float((1.0 - cosW) / a0)
+            lpB2 = Float((1.0 - cosW) / 2.0 / a0)
+            lpA1 = Float(-2.0 * cosW / a0)
+            lpA2 = Float((1.0 - alpha) / a0)
+            lpConfiguredRate = sampleRate
+            lpX1 = 0; lpX2 = 0; lpY1 = 0; lpY2 = 0
+        }
+
+        for i in 0..<count {
+            let x = samples[i]
+            let y = lpB0 * x + lpB1 * lpX1 + lpB2 * lpX2 - lpA1 * lpY1 - lpA2 * lpY2
+            lpX2 = lpX1; lpX1 = x
+            lpY2 = lpY1; lpY1 = y
+            samples[i] = y
+        }
+    }
+
+    /// Pre-emphasis filter — boosts consonant frequencies (1-4 kHz) that help the recognizer
+    /// distinguish similar-sounding words ("forcing" vs "four sing", "space" vs "face").
+    /// Standard speech processing: y[n] = x[n] - 0.97 * x[n-1]
+    private func applyPreEmphasis(_ samples: UnsafeMutablePointer<Float>, count: Int) {
+        let coeff: Float = 0.97
+        for i in 0..<count {
+            let x = samples[i]
+            samples[i] = x - coeff * preEmphPrev
+            preEmphPrev = x
+        }
+    }
+
+    /// Speech gate — checks if the buffer contains enough energy to be speech.
+    /// Prevents the RMS normalizer from amplifying silence/music-only segments,
+    /// which causes the recognizer to hallucinate words from noise.
+    private func passesSpeechGate(_ samples: UnsafeMutablePointer<Float>, count: Int) -> Bool {
+        var rms: Float = 0
+        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
+        // After band-pass + pre-emphasis, speech typically has RMS > 0.005.
+        // Below that it's background noise or very quiet music.
+        return rms > 0.005
     }
 
     /// Normalizes RMS to ~0.1 so quiet speech and loud music hit the recognizer at consistent levels.
