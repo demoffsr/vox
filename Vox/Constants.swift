@@ -44,6 +44,34 @@ enum Constants {
         - Return ONLY the translation, no explanations or preamble
         """
     }
+
+    static func subtitleTranslationPrompt(targetLanguage: TargetLanguage) -> String {
+        let lang: String
+        switch targetLanguage {
+        case .auto:     lang = "Russian"
+        case .english:  lang = "English"
+        case .russian:  lang = "Russian"
+        case .spanish:  lang = "Spanish"
+        case .french:   lang = "French"
+        case .german:   lang = "German"
+        case .chinese:  lang = "Simplified Chinese"
+        case .japanese: lang = "Japanese"
+        }
+
+        return """
+        Translate to \(lang). Natural spoken style, subtitles.
+        Keep names and technical terms unchanged.
+        
+        """
+    }
+
+    /// Punctuation characters that indicate a sentence end (Latin + CJK).
+    static let sentenceEndCharacters: Set<Character> = [
+        ".", "!", "?",
+        "\u{3002}", // CJK period
+        "\u{FF01}", // fullwidth !
+        "\u{FF1F}", // fullwidth ?
+    ]
 }
 
 enum ClaudeModel: String, CaseIterable, Identifiable {
@@ -96,6 +124,18 @@ enum SubtitleLanguage: String, CaseIterable, Identifiable {
         case .japanese: return "🇯🇵"
         }
     }
+
+    var localeLanguage: Locale.Language {
+        switch self {
+        case .english:  return .init(identifier: "en")
+        case .russian:  return .init(identifier: "ru")
+        case .spanish:  return .init(identifier: "es")
+        case .french:   return .init(identifier: "fr")
+        case .german:   return .init(identifier: "de")
+        case .chinese:  return .init(identifier: "zh-Hans")
+        case .japanese: return .init(identifier: "ja")
+        }
+    }
 }
 
 enum TargetLanguage: String, CaseIterable, Identifiable {
@@ -133,6 +173,18 @@ enum TargetLanguage: String, CaseIterable, Identifiable {
         case .german: return "DE"
         case .chinese: return "ZH"
         case .japanese: return "JA"
+        }
+    }
+
+    var localeLanguage: Locale.Language {
+        switch self {
+        case .auto, .english: return .init(identifier: "en")
+        case .russian:  return .init(identifier: "ru")
+        case .spanish:  return .init(identifier: "es")
+        case .french:   return .init(identifier: "fr")
+        case .german:   return .init(identifier: "de")
+        case .chinese:  return .init(identifier: "zh-Hans")
+        case .japanese: return .init(identifier: "ja")
         }
     }
 }

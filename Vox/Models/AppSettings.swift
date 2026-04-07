@@ -50,4 +50,24 @@ final class AppSettings {
         get { UserDefaults.standard.object(forKey: "showNativeSubtitles") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "showNativeSubtitles") }
     }
+
+    var subtitleTranslationModel: ClaudeModel {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "subtitleTranslationModel") ?? ClaudeModel.haiku.rawValue
+            return ClaudeModel(rawValue: raw) ?? .haiku
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "subtitleTranslationModel")
+        }
+    }
+
+    var subtitleTranslationLanguage: TargetLanguage? {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: "subtitleTranslationLanguage") else { return nil }
+            return TargetLanguage(rawValue: raw)
+        }
+        set {
+            UserDefaults.standard.set(newValue?.rawValue, forKey: "subtitleTranslationLanguage")
+        }
+    }
 }

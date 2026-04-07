@@ -3,28 +3,43 @@ import AppKit
 // MARK: - Subtitle Panel (Pure AppKit)
 
 /// Floating subtitle overlay. Pure AppKit — no SwiftUI, no observation issues.
-/// Pixel-measured line breaking, YouTube-style 2-line display.
+/// Dual-line display: original (small, dim) on top, translation (large, bright) below.
+/// Supports streaming — call appendTranslation() per token for typewriter effect.
 @MainActor
 final class SubtitlePanel: NSPanel {
     private let label = NSTextField(labelWithString: "")
+    private let originalLabel = NSTextField(labelWithString: "")
     private var fadeTimer: Timer?
     private var isFadingOut = false
 
     private var confirmedWords: [String] = []
     private var volatileText: String = ""
 
-    private let maxLineWidth: CGFloat = 450
-    private let subtitleFont = NSFont.systemFont(ofSize: 20, weight: .medium)
-    private static let panelWidth: CGFloat = 520
+    /// When set, panel displays this instead of original transcriber text.
+    /// Original state (confirmedWords/volatileText) keeps accumulating in background.
+    var translationOverride: String?
 
-    /// Combined display text (for IPC).
-    var displayText: String {
+    /// Generation counter — prevents stale streaming tokens from updating the panel.
+    private var translationGeneration: UInt64 = 0
+
+    private let maxLineWidth: CGFloat = 550
+    private let subtitleFont = NSFont.systemFont(ofSize: 20, weight: .medium)
+    private let originalFont = NSFont.systemFont(ofSize: 14, weight: .regular)
+    private static let panelWidth: CGFloat = 620
+
+    /// Original (untranslated) text from transcriber — used as translation input.
+    var originalDisplayText: String {
         var all = confirmedWords.joined(separator: " ")
         if !volatileText.isEmpty {
             if !all.isEmpty { all += " " }
             all += volatileText
         }
         return all
+    }
+
+    /// What's currently shown on screen (translation if available, otherwise original).
+    var displayText: String {
+        translationOverride ?? originalDisplayText
     }
 
     init() {
@@ -56,7 +71,21 @@ final class SubtitlePanel: NSPanel {
         bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
         bg.layer?.cornerRadius = 10
 
-        // Label setup
+        // Original label — small, dim, shown above translation
+        originalLabel.font = originalFont
+        originalLabel.textColor = NSColor.white.withAlphaComponent(0.5)
+        originalLabel.backgroundColor = .clear
+        originalLabel.isBezeled = false
+        originalLabel.isEditable = false
+        originalLabel.isSelectable = false
+        originalLabel.lineBreakMode = .byTruncatingTail
+        originalLabel.maximumNumberOfLines = 1
+        originalLabel.alignment = .left
+        originalLabel.cell?.wraps = false
+        originalLabel.cell?.isScrollable = false
+        originalLabel.isHidden = true
+
+        // Translation/main label
         label.font = subtitleFont
         label.textColor = .white
         label.backgroundColor = .clear
@@ -69,17 +98,23 @@ final class SubtitlePanel: NSPanel {
         label.cell?.wraps = true
         label.cell?.isScrollable = false
 
+        bg.addSubview(originalLabel)
         bg.addSubview(label)
         self.contentView = bg
 
         // Layout
         bg.autoresizingMask = [.width, .height]
+        originalLabel.translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
+            originalLabel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 24),
+            originalLabel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -24),
+            originalLabel.topAnchor.constraint(equalTo: bg.topAnchor, constant: 10),
+
             label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 24),
             label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -24),
-            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: 12),
-            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -12),
+            label.topAnchor.constraint(equalTo: originalLabel.bottomAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -10),
         ])
 
         positionAtBottom()
@@ -92,19 +127,62 @@ final class SubtitlePanel: NSPanel {
 
     func showVolatile(_ text: String) {
         volatileText = text
-        updateLabel()
+        // When translation is active, don't overwrite the label with English
+        if translationOverride == nil {
+            updateLabel()
+        }
         show()
     }
 
     func showFinal(_ text: String) {
         confirmedWords += text.split(separator: " ").map(String.init)
         volatileText = ""
-        updateLabel()
+        // When translation is active, don't overwrite the label with English
+        if translationOverride == nil {
+            updateLabel()
+        }
         show()
         // Trim old words
         if confirmedWords.count > 60 {
             confirmedWords = Array(confirmedWords.suffix(30))
         }
+    }
+
+    /// Set translation text directly (no streaming). Updates label immediately.
+    func showTranslation(_ text: String) {
+        translationOverride = text
+        updateLabel()
+        show()
+    }
+
+    /// Append a streaming token to the translation. Typewriter effect.
+    /// Checks generation to ignore tokens from cancelled requests.
+    func appendTranslation(_ token: String, generation: UInt64) {
+        guard generation == translationGeneration else { return }
+        if translationOverride == nil || translationOverride == "..." {
+            translationOverride = ""
+        }
+        translationOverride! += token
+        updateLabel()
+        show()
+    }
+
+    /// Clears translation and returns a new generation token.
+    @discardableResult
+    func clearTranslation() -> UInt64 {
+        translationGeneration += 1
+        translationOverride = nil
+        originalLabel.isHidden = true
+        originalLabel.stringValue = ""
+        updateLabel()
+        return translationGeneration
+    }
+
+    /// Show "..." placeholder while waiting for first translation token.
+    func showTranslationPending() {
+        translationOverride = "..."
+        updateLabel()
+        show()
     }
 
     func fadeOut() {
@@ -121,18 +199,20 @@ final class SubtitlePanel: NSPanel {
             self.orderOut(nil)
             self.confirmedWords.removeAll()
             self.volatileText = ""
+            self.translationOverride = nil
             self.label.stringValue = ""
+            self.originalLabel.stringValue = ""
+            self.originalLabel.isHidden = true
         })
     }
 
     // MARK: - Private
 
     private func updateLabel() {
-        // Combine all words
-        var allWords = confirmedWords
-        if !volatileText.isEmpty {
-            allWords += volatileText.split(separator: " ").map(String.init)
-        }
+        let text = translationOverride ?? originalDisplayText
+        let allWords = text.split(separator: " ").map(String.init)
+
+        let maxLines = 2
 
         // Word-wrap by measured pixel width
         var lines: [String] = []
@@ -150,9 +230,9 @@ final class SubtitlePanel: NSPanel {
             lines.append(currentLine)
         }
 
-        // Show last 2 lines
-        let visible = lines.suffix(2)
+        let visible = lines.suffix(maxLines)
         label.stringValue = visible.joined(separator: "\n")
+        label.maximumNumberOfLines = maxLines
     }
 
     private func show() {

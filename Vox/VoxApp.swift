@@ -98,6 +98,17 @@ struct VoxApp: App {
                     }
                 }
             }
+            Menu("Translate Subtitles") {
+                Button("Off") {
+                    AppSettings.shared.subtitleTranslationLanguage = nil
+                }
+                Divider()
+                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                    Button("\(lang.flag) \(lang.rawValue)") {
+                        AppSettings.shared.subtitleTranslationLanguage = lang
+                    }
+                }
+            }
             Divider()
             Button("Settings...") {
                 appDelegate.openSettings()

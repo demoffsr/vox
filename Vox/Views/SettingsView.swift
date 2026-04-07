@@ -33,6 +33,14 @@ struct SettingsView: View {
         Binding(get: { settings.showNativeSubtitles }, set: { settings.showNativeSubtitles = $0 })
     }
 
+    private var subtitleTranslationLanguageBinding: Binding<TargetLanguage?> {
+        Binding(get: { settings.subtitleTranslationLanguage }, set: { settings.subtitleTranslationLanguage = $0 })
+    }
+
+    private var subtitleTranslationModelBinding: Binding<ClaudeModel> {
+        Binding(get: { settings.subtitleTranslationModel }, set: { settings.subtitleTranslationModel = $0 })
+    }
+
     var body: some View {
         ZStack {
             // Background gradient
@@ -150,6 +158,45 @@ struct SettingsView: View {
             }
 
             Text("Show floating subtitles over any app. Safari overlay always active.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.25))
+                .padding(.top, 4)
+                .padding(.leading, 28)
+
+            divider
+
+            row(icon: "character.bubble", title: "Translate to") {
+                Picker("", selection: subtitleTranslationLanguageBinding) {
+                    Text("Off").tag(TargetLanguage?.none)
+                    ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                        Text("\(lang.flag) \(lang.rawValue)").tag(Optional(lang))
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 145)
+                .tint(.white.opacity(0.7))
+            }
+
+            Text("Live translation via Claude API (streaming). Requires API key.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.25))
+                .padding(.top, 4)
+                .padding(.leading, 28)
+
+            divider
+
+            row(icon: "cpu", title: "Subtitle model") {
+                Picker("", selection: subtitleTranslationModelBinding) {
+                    ForEach(ClaudeModel.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 145)
+                .tint(.white.opacity(0.7))
+            }
+
+            Text("Haiku is fast and cheap. Sonnet is slower but translates better.")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.25))
                 .padding(.top, 4)
