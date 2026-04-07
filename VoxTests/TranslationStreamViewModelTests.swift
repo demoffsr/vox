@@ -23,7 +23,7 @@ struct TranslationStreamViewModelTests {
     @Test func clearResetsEverything() {
         let vm = TranslationStreamViewModel()
         vm.append("some text")
-        vm.commitRefinedText("Refined text.")
+        vm.commitRefinedText("Refined text.", chunkCount: 1)
         vm.append("more")
         vm.clear()
         #expect(vm.accumulatedText == "")
@@ -34,7 +34,7 @@ struct TranslationStreamViewModelTests {
         let vm = TranslationStreamViewModel()
         vm.append("raw one")
         vm.append("raw two")
-        vm.commitRefinedText("Refined one. Refined two.")
+        vm.commitRefinedText("Refined one. Refined two.", chunkCount: 2)
         vm.append("raw three")
         #expect(vm.accumulatedText == "Refined one. Refined two. raw three")
         #expect(vm.pendingChunksCount == 1)
@@ -45,9 +45,20 @@ struct TranslationStreamViewModelTests {
         vm.append("chunk a")
         vm.append("chunk b")
         #expect(vm.pendingChunksCount == 2)
-        vm.commitRefinedText("Chunk A. Chunk B.")
+        vm.commitRefinedText("Chunk A. Chunk B.", chunkCount: 2)
         #expect(vm.pendingChunksCount == 0)
         #expect(vm.accumulatedText == "Chunk A. Chunk B.")
+    }
+
+    @Test func commitRefinedTextPreservesNewChunks() {
+        let vm = TranslationStreamViewModel()
+        vm.append("chunk a")
+        vm.append("chunk b")
+        vm.append("chunk c")
+        // Refine captured first 2 chunks, chunk c arrived after
+        vm.commitRefinedText("Chunk A. Chunk B.", chunkCount: 2)
+        #expect(vm.pendingChunksCount == 1)
+        #expect(vm.accumulatedText == "Chunk A. Chunk B. chunk c")
     }
 
     @Test func pendingTextReturnsPendingChunksJoined() {
@@ -60,7 +71,7 @@ struct TranslationStreamViewModelTests {
 
     @Test func refinedTailReturnsLastWords() {
         let vm = TranslationStreamViewModel()
-        vm.commitRefinedText("one two three four five six seven eight")
+        vm.commitRefinedText("one two three four five six seven eight", chunkCount: 0)
         let tail = vm.refinedTail(maxWords: 4)
         #expect(tail == "five six seven eight")
     }
@@ -73,7 +84,7 @@ struct TranslationStreamViewModelTests {
 
     @Test func refinedTailClampsToAvailable() {
         let vm = TranslationStreamViewModel()
-        vm.commitRefinedText("hello world")
+        vm.commitRefinedText("hello world", chunkCount: 0)
         #expect(vm.refinedTail(maxWords: 100) == "hello world")
     }
 }

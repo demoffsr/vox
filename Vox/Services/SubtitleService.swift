@@ -26,6 +26,8 @@ final class SubtitleService {
     private var lastShownTranslation: String = ""
     private var lastTranslation: (english: String, russian: String)?
     private var rateLimitUntil: TimeInterval = 0
+    private var refineIdleTimer: Task<Void, Never>?
+    private var isRefining = false
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -118,6 +120,9 @@ final class SubtitleService {
         translationTimer = nil
         pendingTranslation?.cancel()
         pendingTranslation = nil
+        refineIdleTimer?.cancel()
+        refineIdleTimer = nil
+        isRefining = false
         translator = nil
         lastTranslatedInput = ""
         lastTranslationTime = 0
@@ -221,10 +226,28 @@ final class SubtitleService {
                     self.lastTranslation = (english: input, russian: result)
 
                     if let vm = self.streamViewModel {
-                        let pendingCount = vm.append(result)
-                        // Trigger batch refine every 3 pending chunks
-                        if pendingCount >= 3 {
+                        // Strip Russian overlap with previous chunk
+                        let deduped = Self.trimOverlap(new: result, previous: vm.lastChunk)
+                        guard deduped.split(separator: " ").count >= 2 else {
+                            print("[Translate] OVERLAP — skipping duplicate")
+                            return
+                        }
+                        let pendingCount = vm.append(deduped)
+
+                        self.refineIdleTimer?.cancel()
+                        self.refineIdleTimer = nil
+
+                        if pendingCount >= 2 {
                             self.triggerBatchRefine(language: targetLang)
+                        } else {
+                            // Refine even 1 chunk after 6s of silence
+                            self.refineIdleTimer = Task {
+                                try? await Task.sleep(for: .seconds(6))
+                                guard !Task.isCancelled else { return }
+                                guard let vm = self.streamViewModel,
+                                      vm.pendingChunksCount > 0 else { return }
+                                self.triggerBatchRefine(language: targetLang)
+                            }
                         }
                     } else {
                         self.subtitlePanel.showTranslation(result)
@@ -244,23 +267,32 @@ final class SubtitleService {
     }
 
     private func triggerBatchRefine(language: TargetLanguage) {
+        guard !isRefining else { return }
         guard let vm = streamViewModel, let translator = translator else { return }
         let textToRefine = vm.pendingText
+        let chunkCount = vm.pendingChunksCount
         let context = vm.refinedTail(maxWords: 30)
         guard !textToRefine.isEmpty else { return }
 
-        print("[Refine] Sending \(vm.pendingChunksCount) chunks for cleanup")
+        isRefining = true
+        print("[Refine] Sending \(chunkCount) chunks for cleanup")
 
         Task {
+            defer { self.isRefining = false }
             if let cleaned = await translator.cleanup(
                 text: textToRefine,
                 context: context,
                 language: language
             ) {
                 await MainActor.run {
-                    vm.commitRefinedText(cleaned)
+                    vm.commitRefinedText(cleaned, chunkCount: chunkCount)
                     print("[Refine] \"\(textToRefine)\" → \"\(cleaned)\"")
                 }
+            }
+
+            // If more chunks accumulated while refining, go again
+            if let vm = self.streamViewModel, vm.pendingChunksCount >= 2 {
+                self.triggerBatchRefine(language: language)
             }
         }
     }
@@ -286,15 +318,19 @@ final class SubtitleService {
             let newPrefix = newWords.prefix(overlapLen)
 
             let match = zip(prevSuffix, newPrefix).allSatisfy { a, b in
-                a.trimmingCharacters(in: .punctuationCharacters).lowercased() ==
-                b.trimmingCharacters(in: .punctuationCharacters).lowercased()
+                let aNorm = a.trimmingCharacters(in: .punctuationCharacters).lowercased()
+                let bNorm = b.trimmingCharacters(in: .punctuationCharacters).lowercased()
+                if aNorm == bNorm { return true }
+                // Prefix match for truncated words: "pill" ≈ "pillars"
+                let shorter = min(aNorm.count, bNorm.count)
+                guard shorter >= 4 else { return false }
+                return aNorm.prefix(shorter) == bNorm.prefix(shorter)
             }
 
             if match {
                 let remaining = Array(newWords.dropFirst(overlapLen))
-                if remaining.count >= 3 {
-                    return remaining.joined(separator: " ")
-                }
+                // Return remaining even if short — caller's `count >= 4` guard handles it
+                return remaining.joined(separator: " ")
             }
         }
 
@@ -312,7 +348,7 @@ final class SubtitleService {
         let prevWords = previous.split(separator: " ").map(String.init)
         let maxOverlap = min(newWords.count, prevWords.count, 8)
 
-        for overlapLen in stride(from: maxOverlap, through: 2, by: -1) {
+        for overlapLen in stride(from: maxOverlap, through: 1, by: -1) {
             let prevSuffix = prevWords.suffix(overlapLen)
             let newPrefix = newWords.prefix(overlapLen)
 
@@ -321,10 +357,13 @@ final class SubtitleService {
             }
 
             if match {
-                let remaining = Array(newWords.dropFirst(overlapLen))
-                if remaining.count >= 2 {
-                    return remaining.joined(separator: " ")
+                // Single-word overlap only for long words to avoid false positives ("и", "в", "что")
+                if overlapLen == 1 {
+                    let word = newWords[0].trimmingCharacters(in: .punctuationCharacters)
+                    guard word.count >= 5 else { continue }
                 }
+                let remaining = Array(newWords.dropFirst(overlapLen))
+                return remaining.joined(separator: " ")
             }
         }
 

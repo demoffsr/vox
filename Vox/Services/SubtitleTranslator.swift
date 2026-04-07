@@ -98,11 +98,13 @@ final class SubtitleTranslator {
         let system = """
         /* prompt redacted */ \(langName) 
         Fix the new text ONLY:
-        - Add proper punctuation: commas, periods, question marks where sentences end
         - 
-        - If the new text continues mid-sentence from context, do NOT capitalize the first word
-        - Split run-on text into proper sentences
-        - Keep meaning exactly the same — do not add, remove, or rephrase words
+        -  — do NOT add closing punctuation
+        - 
+        - 
+        - 
+        - , do not guess missing words
+        - 
         - 
         """
 

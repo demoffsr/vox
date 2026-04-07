@@ -36,8 +36,9 @@ final class TranslationStreamViewModel {
         return pendingChunks.count
     }
 
-    /// Replace all pending chunks with refined text.
-    func commitRefinedText(_ text: String) {
+    /// Replace the first `chunkCount` pending chunks with refined text.
+    /// Chunks appended after the refine request started are preserved.
+    func commitRefinedText(_ text: String, chunkCount: Int) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if refinedText.isEmpty {
@@ -45,7 +46,13 @@ final class TranslationStreamViewModel {
         } else {
             refinedText += " " + trimmed
         }
-        pendingChunks.removeAll()
+        let removeCount = min(chunkCount, pendingChunks.count)
+        pendingChunks.removeFirst(removeCount)
+    }
+
+    /// The last appended chunk (for Russian overlap trimming).
+    var lastChunk: String {
+        pendingChunks.last ?? refinedTail(maxWords: 8)
     }
 
     /// Get the last N words of refined text (for context in refine API call).
