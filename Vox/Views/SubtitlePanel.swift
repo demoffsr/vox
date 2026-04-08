@@ -74,7 +74,7 @@ final class SubtitlePanel: NSPanel {
         level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        hasShadow = true
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
@@ -88,8 +88,10 @@ final class SubtitlePanel: NSPanel {
         // Dark rounded background
         let bg = NSView(frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 100))
         bg.wantsLayer = true
-        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
-        bg.layer?.cornerRadius = 10
+        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.80).cgColor
+        bg.layer?.cornerRadius = 14
+        bg.layer?.borderWidth = 0.5
+        bg.layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
 
         // Original label — small, dim, shown above translation
         originalLabel.font = originalFont
@@ -117,6 +119,12 @@ final class SubtitlePanel: NSPanel {
         label.alignment = .left
         label.cell?.wraps = true
         label.cell?.isScrollable = false
+
+        let textShadow = NSShadow()
+        textShadow.shadowBlurRadius = 4
+        textShadow.shadowOffset = NSSize(width: 0, height: -1)
+        textShadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
+        label.shadow = textShadow
 
         bg.addSubview(originalLabel)
         bg.addSubview(label)

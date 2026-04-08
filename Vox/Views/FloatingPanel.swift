@@ -18,7 +18,7 @@ final class FloatingPanel: NSPanel {
         level = .floating
         isOpaque = false
         backgroundColor = NSColor.clear
-        hasShadow = false
+        hasShadow = true
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
@@ -27,17 +27,33 @@ final class FloatingPanel: NSPanel {
         hidesOnDeactivate = false
         becomesKeyOnlyIfNeeded = true
 
-        // Wrap in AnyView for type erasure
+        // Glass background (like Spotlight)
+        let visualEffect = NSVisualEffectView()
+        visualEffect.material = .hudWindow
+        visualEffect.blendingMode = .behindWindow
+        visualEffect.state = .active
+        visualEffect.wantsLayer = true
+        visualEffect.layer?.cornerRadius = 16
+        visualEffect.layer?.masksToBounds = true
+
+        // SwiftUI content on top of glass
         let hosting = NSHostingView(rootView: AnyView(contentView))
         hosting.wantsLayer = true
         hosting.layer?.backgroundColor = CGColor.clear
-
-        // Make the hosting view's background fully transparent
         if let layer = hosting.layer {
             layer.isOpaque = false
         }
 
-        self.contentView = hosting
+        visualEffect.addSubview(hosting)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hosting.topAnchor.constraint(equalTo: visualEffect.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
+            hosting.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
+        ])
+
+        self.contentView = visualEffect
         self.hostingView = hosting
     }
 
@@ -172,12 +188,6 @@ final class PanelController {
         resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.panel?.resizeToFit()
-                // Stop polling when translation is done
-                if self?.viewModel.isTranslating == false {
-                    self?.stopResizePolling()
-                    // One final resize
-                    self?.panel?.resizeToFit()
-                }
             }
         }
     }
