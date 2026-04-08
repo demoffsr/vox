@@ -13,8 +13,8 @@ final class SentenceBuffer {
     private var confirmedWords: [String] = []
     private var volatileText: String = ""
     private var lastDraftWordCount: Int = 0
-    private var bufferStartTime: TimeInterval = 0
     private var draftDebounce: Task<Void, Never>?
+    private var timeOverflowTimer: Task<Void, Never>?
 
     /// Text safe for translation: confirmed + volatile minus last word.
     var safeText: String {
@@ -47,23 +47,18 @@ final class SentenceBuffer {
             volatileText = text
         }
 
-        // Track when buffer started filling
-        if bufferStartTime == 0 && totalWordCount > 0 {
-            bufferStartTime = Date().timeIntervalSince1970
+        // Start time overflow timer on first word
+        if timeOverflowTimer == nil && totalWordCount > 0 {
+            startTimeOverflow()
         }
 
-        // Punctuation check only on final words (volatile may be incomplete)
         if isFinal {
+            // Punctuation + overflow only on confirmed words
             if checkPunctuation() { return }
-        }
-
-        // Overflow and time checks run on EVERY update (volatile too)
-        if checkOverflow() { return }
-
-        // Draft — debounced on volatile, immediate on final
-        if isFinal {
+            if checkOverflow() { return }
             checkDraft()
         } else {
+            // Volatile: only debounced drafts (no overflow — volatile is non-incremental)
             scheduleDraft()
         }
     }
@@ -73,24 +68,22 @@ final class SentenceBuffer {
         guard totalWordCount >= 2 else { return }
         let text = safeText
         guard !text.isEmpty else { return }
-        draftDebounce?.cancel()
-        onEvent?(.sentenceComplete(text: text))
-        resetBuffer()
+        commitSentence(text)
     }
 
     func reset() {
         confirmedWords = []
         volatileText = ""
         lastDraftWordCount = 0
-        bufferStartTime = 0
         draftDebounce?.cancel()
         draftDebounce = nil
+        timeOverflowTimer?.cancel()
+        timeOverflowTimer = nil
     }
 
     // MARK: - Boundary Detection
 
     /// Scan confirmed words for sentence-ending punctuation (.?!).
-    /// Returns true if a boundary was found and handled.
     private func checkPunctuation() -> Bool {
         guard let splitIdx = confirmedWords.lastIndex(where: { word in
             let trimmed = word.trimmingCharacters(in: .whitespaces)
@@ -104,51 +97,53 @@ final class SentenceBuffer {
 
         confirmedWords = remainingWords
         lastDraftWordCount = 0
-        bufferStartTime = confirmedWords.isEmpty ? 0 : Date().timeIntervalSince1970
+        restartTimeOverflow()
         draftDebounce?.cancel()
         onEvent?(.sentenceComplete(text: sentenceText))
 
-        // Recurse if remaining words also contain punctuation
         if !confirmedWords.isEmpty {
             _ = checkPunctuation()
         }
         return true
     }
 
-    /// Check word count and time-based overflow.
-    /// Returns true if a boundary was triggered.
+    /// Word count overflow — only called on isFinal.
     private func checkOverflow() -> Bool {
+        // Use confirmed words count (reliable) + volatile
         let total = totalWordCount
+        guard total >= 18 else { return false }
 
-        // Word overflow: >= 18 total words → force sentence boundary
-        if total >= 18 {
-            let text = safeText
-            guard !text.isEmpty else { return false }
-            draftDebounce?.cancel()
-            onEvent?(.sentenceComplete(text: text))
-            resetBuffer()
-            return true
+        let text = safeText
+        guard !text.isEmpty else { return false }
+        commitSentence(text)
+        return true
+    }
+
+    // MARK: - Time Overflow
+
+    /// Start a timer: if buffer has been filling for 8 seconds, force sentenceComplete.
+    private func startTimeOverflow() {
+        timeOverflowTimer?.cancel()
+        timeOverflowTimer = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            guard self.totalWordCount >= 4 else { return }
+            let text = self.safeText
+            guard !text.isEmpty else { return }
+            self.commitSentence(text)
         }
+    }
 
-        // Time overflow: > 8 seconds of accumulation with >= 5 words
-        if bufferStartTime > 0 && total >= 5 {
-            let elapsed = Date().timeIntervalSince1970 - bufferStartTime
-            if elapsed >= 8.0 {
-                let text = safeText
-                guard !text.isEmpty else { return false }
-                draftDebounce?.cancel()
-                onEvent?(.sentenceComplete(text: text))
-                resetBuffer()
-                return true
-            }
+    private func restartTimeOverflow() {
+        timeOverflowTimer?.cancel()
+        timeOverflowTimer = nil
+        if totalWordCount > 0 {
+            startTimeOverflow()
         }
-
-        return false
     }
 
     // MARK: - Draft
 
-    /// Debounce draft: wait 500ms after last volatile word before sending.
     private func scheduleDraft() {
         draftDebounce?.cancel()
         draftDebounce = Task {
@@ -158,7 +153,6 @@ final class SentenceBuffer {
         }
     }
 
-    /// Emit draft if enough new words accumulated.
     private func checkDraft() {
         let total = totalWordCount
         guard total >= 3 else { return }
@@ -170,12 +164,16 @@ final class SentenceBuffer {
         lastDraftWordCount = total
     }
 
-    private func resetBuffer() {
+    // MARK: - Commit
+
+    private func commitSentence(_ text: String) {
+        draftDebounce?.cancel()
+        draftDebounce = nil
+        timeOverflowTimer?.cancel()
+        timeOverflowTimer = nil
         confirmedWords = []
         volatileText = ""
         lastDraftWordCount = 0
-        bufferStartTime = 0
-        draftDebounce?.cancel()
-        draftDebounce = nil
+        onEvent?(.sentenceComplete(text: text))
     }
 }
