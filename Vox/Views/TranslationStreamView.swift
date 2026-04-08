@@ -8,7 +8,6 @@ struct TranslationStreamView: View {
     @State private var showLanguagePicker = false
     @State private var hoveredLanguage: TargetLanguage?
     @State private var isNearBottom = true
-    @State private var committedLength: Int = 0
     var onLanguageChanged: ((TargetLanguage) -> Void)?
     var onPolish: (() -> Void)?
     var onClose: (() -> Void)?
@@ -97,7 +96,7 @@ struct TranslationStreamView: View {
                     }
                     if lang != viewModel.selectedLanguage {
                         viewModel.selectedLanguage = lang
-                        viewModel.clear(); committedLength = 0
+                        viewModel.clear()
                         onLanguageChanged?(lang)
                     }
                 }) {
@@ -167,18 +166,6 @@ struct TranslationStreamView: View {
                 }
             }
             .onChange(of: viewModel.accumulatedText) {
-                let fullCount = viewModel.accumulatedText.count
-                if fullCount > committedLength {
-                    // New text — commit after delay (fresh text is dimmer)
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(0.6))
-                        committedLength = viewModel.accumulatedText.count
-                    }
-                } else {
-                    // Refine or clear — commit immediately
-                    committedLength = fullCount
-                }
-
                 if isNearBottom {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
@@ -195,25 +182,25 @@ struct TranslationStreamView: View {
         .frame(minHeight: 100)
     }
 
-    // MARK: - Styled Text (fresh words appear dimmer, then settle)
+    // MARK: - Styled Text (final = bright, draft = dim)
 
     private var styledText: Text {
         let full = viewModel.accumulatedText
         guard !full.isEmpty else { return Text("") }
 
-        let safeLen = min(committedLength, full.count)
-        let committed = String(full.prefix(safeLen))
-        let fresh = String(full.dropFirst(safeLen))
+        let safeLen = min(viewModel.finalLength, full.count)
+        let finalPart = String(full.prefix(safeLen))
+        let draftPart = String(full.dropFirst(safeLen))
 
-        if fresh.isEmpty {
-            return Text(committed)
+        if draftPart.isEmpty {
+            return Text(finalPart)
                 .foregroundColor(.white.opacity(0.95))
         }
 
-        return Text(committed)
+        return Text(finalPart)
             .foregroundColor(.white.opacity(0.95))
-        + Text(fresh)
-            .foregroundColor(.white.opacity(0.45))
+        + Text(draftPart)
+            .foregroundColor(.white.opacity(0.35))
     }
 
     // MARK: - Bottom Bar
@@ -221,7 +208,7 @@ struct TranslationStreamView: View {
     private var bottomBar: some View {
         HStack(spacing: 10) {
             // Clear button
-            Button(action: { viewModel.clear(); committedLength = 0 }) {
+            Button(action: { viewModel.clear() }) {
                 HStack(spacing: 6) {
                     Image(systemName: "trash")
                         .font(.system(size: 11, weight: .semibold))
@@ -315,7 +302,6 @@ struct TranslationStreamView: View {
             // Wait for polishing to finish
             while viewModel.isPolishing { try? await Task.sleep(for: .milliseconds(100)) }
             polished = true
-            committedLength = viewModel.accumulatedText.count
             try? await Task.sleep(for: .seconds(1.5))
             polished = false
         }
