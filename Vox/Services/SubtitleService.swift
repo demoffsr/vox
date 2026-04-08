@@ -6,6 +6,7 @@ final class SubtitleService {
     private let audioCapture = SystemAudioCapture()
     private let transcriber = LiveTranscriber()
     private let subtitlePanel = SubtitlePanel()
+    private let sentenceBuffer = SentenceBuffer()
 
     private let ipcFile: URL = {
         let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Constants.appGroupID)!
@@ -17,19 +18,12 @@ final class SubtitleService {
     private var lastWriteTime: TimeInterval = 0
     private var lastWrittenText: String = ""
 
-    // Translation state — intentionally minimal
+    // Translation state
     private var translator: SubtitleTranslator?
-    private var pendingTranslation: Task<Void, Never>?
-    private var translationTimer: Task<Void, Never>?
-    private var lastTranslationTime: TimeInterval = 0
-    private var lastTranslatedInput: String = ""
-    private var lastShownTranslation: String = ""
-    private var lastTranslation: (english: String, russian: String)?
+    private var draftTask: Task<Void, Never>?
+    private var finalTask: Task<Void, Never>?
+    private var lastFinalTranslation: (english: String, russian: String)?
     private var rateLimitUntil: TimeInterval = 0
-    private var refineIdleTimer: Task<Void, Never>?
-    private var isRefining = false
-    private var vocabularyUpdateCounter = 0
-    private var isFirstTranslation = true
     private var videoTopic: String?
     private var translationCount = 0
     private var accumulatedEnglish: [String] = []
@@ -38,10 +32,8 @@ final class SubtitleService {
     private var streamViewModel: TranslationStreamViewModel?
     private var streamPanel: TranslationStreamPanel?
 
-    /// The current subtitle language locale identifier (e.g. "en-US", "ru-RU").
     var subtitleLocale: Locale = Locale(identifier: "en-US")
 
-    /// Live-computed: reads AppSettings each time so mode switches are immediate.
     private var translationActive: Bool {
         AppSettings.shared.subtitleTranslationLanguage != nil
     }
@@ -49,16 +41,21 @@ final class SubtitleService {
     func start() async {
         guard !isRunning else { return }
 
+        sentenceBuffer.onEvent = { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .draftReady(let text):
+                self.translateDraft(text)
+            case .sentenceComplete(let text):
+                self.translateFinal(text)
+            }
+        }
+
         transcriber.onSubtitle = { [weak self] text, isFinal in
             Task { @MainActor in
                 guard let self else { return }
                 if self.translationActive {
-                    // Accumulate words for overlap trimming, but don't show SubtitlePanel
-                    if isFinal {
-                        self.subtitlePanel.accumulateFinal(text)
-                    } else {
-                        self.subtitlePanel.accumulateVolatile(text)
-                    }
+                    self.sentenceBuffer.accumulateWords(text, isFinal: isFinal)
                 } else {
                     if isFinal {
                         self.subtitlePanel.showFinal(text)
@@ -69,9 +66,13 @@ final class SubtitleService {
                 if !self.translationActive {
                     self.throttledWriteIPC(text: self.subtitlePanel.displayText)
                 }
-                if self.translationActive {
-                    self.onNewWords()
-                }
+            }
+        }
+
+        transcriber.onSilence = { [weak self] durationMs in
+            Task { @MainActor in
+                guard let self, self.translationActive else { return }
+                self.sentenceBuffer.reportSilence(durationMs: durationMs)
             }
         }
 
@@ -99,7 +100,6 @@ final class SubtitleService {
 
         isRunning = true
 
-        // Open translation stream panel if translation is active
         if initialTranslationActive {
             openTranslationStream()
         }
@@ -112,25 +112,17 @@ final class SubtitleService {
         guard isRunning else { return }
         isRunning = false
 
-        translationTimer?.cancel()
-        translationTimer = nil
-        pendingTranslation?.cancel()
-        pendingTranslation = nil
-        refineIdleTimer?.cancel()
-        refineIdleTimer = nil
-        isRefining = false
-        vocabularyUpdateCounter = 0
-        isFirstTranslation = true
+        draftTask?.cancel()
+        draftTask = nil
+        finalTask?.cancel()
+        finalTask = nil
         videoTopic = nil
         translationCount = 0
         accumulatedEnglish = []
         translator = nil
-        lastTranslatedInput = ""
-        lastTranslationTime = 0
-        lastShownTranslation = ""
-        lastTranslation = nil
+        lastFinalTranslation = nil
+        sentenceBuffer.reset()
 
-        // Dismiss translation stream (nil onClose to prevent re-entrant stop)
         streamViewModel?.isActive = false
         streamPanel?.onClose = nil
         streamPanel?.dismiss()
@@ -149,57 +141,48 @@ final class SubtitleService {
 
     // MARK: - Live Mode Switching
 
-    /// Switch translation on/off or change target language while subtitles are running.
-    /// Does NOT restart the transcriber or audio pipeline.
     func switchTranslationMode(to language: TargetLanguage?) {
         AppSettings.shared.subtitleTranslationLanguage = language
 
         if let language {
             if streamPanel != nil {
-                // Already translating — change language, reset context
                 streamViewModel?.selectedLanguage = language
                 streamViewModel?.clear()
-                lastTranslation = nil
-                lastTranslatedInput = ""
-                lastShownTranslation = ""
-                isFirstTranslation = true
+                lastFinalTranslation = nil
                 videoTopic = nil
                 translationCount = 0
                 accumulatedEnglish = []
+                sentenceBuffer.reset()
+                draftTask?.cancel()
+                draftTask = nil
+                finalTask?.cancel()
+                finalTask = nil
                 print("[SubtitleService] Switched translation language to \(language.rawValue)")
             } else {
-                // Enable translation — open stream panel
                 openTranslationStream()
                 print("[SubtitleService] Translation enabled: \(language.rawValue)")
             }
         } else {
-            // Disable translation — close stream panel
             streamViewModel?.isActive = false
             streamPanel?.onClose = nil
             streamPanel?.dismiss()
             streamViewModel = nil
             streamPanel = nil
             subtitlePanel.clearTranslation()
-            translationTimer?.cancel()
-            translationTimer = nil
-            pendingTranslation?.cancel()
-            pendingTranslation = nil
-            refineIdleTimer?.cancel()
-            refineIdleTimer = nil
-            isRefining = false
+            draftTask?.cancel()
+            draftTask = nil
+            finalTask?.cancel()
+            finalTask = nil
             translator = nil
-            lastTranslation = nil
-            lastTranslatedInput = ""
-            lastShownTranslation = ""
-            isFirstTranslation = true
+            lastFinalTranslation = nil
             videoTopic = nil
             translationCount = 0
             accumulatedEnglish = []
+            sentenceBuffer.reset()
             print("[SubtitleService] Translation disabled")
         }
     }
 
-    /// Create and show the translation stream panel. Extracted from start() for reuse.
     private func openTranslationStream() {
         let vm = TranslationStreamViewModel()
         vm.isActive = true
@@ -239,7 +222,6 @@ final class SubtitleService {
         Task {
             defer { vm.isPolishing = false }
 
-            // Detect topic if not yet available
             if videoTopic == nil {
                 let topicSource = accumulatedEnglish.isEmpty ? text : accumulatedEnglish.joined(separator: " ")
                 let sourceWordCount = topicSource.split(separator: " ").count
@@ -269,54 +251,16 @@ final class SubtitleService {
         }
     }
 
-    // MARK: - Translation
+    // MARK: - Draft Translation (Haiku, fast)
 
-    private func onNewWords() {
-        guard AppSettings.shared.subtitleTranslationLanguage != nil else { return }
-        guard subtitlePanel.textForTranslation.split(separator: " ").count >= 8 else { return }
-
-        // Schedule translation after 3s cooldown
-        translationTimer?.cancel()
-        let now = Date().timeIntervalSince1970
-        let elapsed = now - lastTranslationTime
-        let delay = max(0, 4.0 - elapsed)
-
-        translationTimer = Task {
-            if delay > 0 {
-                try? await Task.sleep(for: .seconds(delay))
-            }
-            guard !Task.isCancelled else { return }
-            self.translateNow()
-        }
-    }
-
-    private func translateNow() {
+    private func translateDraft(_ text: String) {
         guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
         let now = Date().timeIntervalSince1970
         if now < rateLimitUntil { return }
 
-        let words = subtitlePanel.textForTranslation.split(separator: " ").map(String.init)
-        guard words.count >= 8 else { return }
+        guard text.split(separator: " ").count >= 3 else { return }
 
-        let rawInput = words.suffix(12).joined(separator: " ")
-        guard rawInput != lastTranslatedInput else { return }
-
-        // Strip English overlap with previous input BEFORE sending to model.
-        // Model only receives truly new words → can't produce overlap in translation.
-        let input = Self.trimEnglishOverlap(new: rawInput, previous: lastTranslatedInput)
-
-        // Need at least 4 words after stripping
-        guard input.split(separator: " ").count >= 4 else { return }
-
-        lastTranslatedInput = rawInput
-        lastTranslationTime = now
-
-        if input != rawInput {
-            print("[Translate] EN raw: \"\(rawInput)\"")
-            print("[Translate] EN trimmed: \"\(input)\"")
-        } else {
-            print("[Translate] EN: \"\(input)\"")
-        }
+        draftTask?.cancel()
 
         if translator == nil {
             guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
@@ -324,202 +268,98 @@ final class SubtitleService {
         }
         guard let translator else { return }
 
-        // First translation uses Sonnet (better ASR error correction with context),
-        // subsequent ones use Haiku (fast)
-        let model: ClaudeModel = isFirstTranslation ? .sonnet : .haiku
-        isFirstTranslation = false
-        let prevTurn = self.lastTranslation
-        let currentTopic = self.videoTopic
-        pendingTranslation?.cancel()
+        let prevTurn = lastFinalTranslation
+        let currentTopic = videoTopic
 
-        // Previous subtitle stays visible until new one arrives — no flicker
-        pendingTranslation = Task {
+        print("[Draft] EN: \"\(text)\"")
+
+        draftTask = Task {
             do {
                 let result = try await translator.translateStreaming(
-                    text: input,
+                    text: text,
                     language: targetLang,
-                    model: model,
+                    model: .haiku,
                     previousTurn: prevTurn,
                     topic: currentTopic,
                     onToken: { _ in }
                 )
                 guard !Task.isCancelled else { return }
-                print("[Translate] RU: \"\(result)\"")
-
-                if !result.isEmpty {
-                    guard result.split(separator: " ").count >= 3 else {
-                        print("[Translate] TOO SHORT — keeping previous")
-                        return
-                    }
-                    self.lastTranslation = (english: input, russian: result)
-
-                    // Topic detection: accumulate english, fire after 3rd translation
-                    self.accumulatedEnglish.append(input)
-                    self.translationCount += 1
-                    if self.translationCount == 3, self.videoTopic == nil {
-                        let combined = self.accumulatedEnglish.joined(separator: " ")
-                        Task {
-                            if let topic = await translator.detectTopic(from: combined) {
-                                self.videoTopic = topic
-                                print("[Topic] Detected: \"\(topic)\"")
-                            }
-                        }
-                    }
-
-                    if let vm = self.streamViewModel {
-                        // Strip Russian overlap with previous chunk
-                        let deduped = Self.trimOverlap(new: result, previous: vm.lastChunk)
-                        guard deduped.split(separator: " ").count >= 2 else {
-                            print("[Translate] OVERLAP — skipping duplicate")
-                            return
-                        }
-                        let pendingCount = vm.append(deduped)
-
-                        self.refineIdleTimer?.cancel()
-                        self.refineIdleTimer = nil
-
-                        if pendingCount >= 2 {
-                            self.triggerBatchRefine(language: targetLang)
-                        } else {
-                            // Refine even 1 chunk after 6s of silence
-                            self.refineIdleTimer = Task {
-                                try? await Task.sleep(for: .seconds(6))
-                                guard !Task.isCancelled else { return }
-                                guard let vm = self.streamViewModel,
-                                      vm.pendingChunksCount > 0 else { return }
-                                self.triggerBatchRefine(language: targetLang)
-                            }
-                        }
-                    } else {
-                        self.subtitlePanel.showTranslation(result)
-                    }
-                    self.lastShownTranslation = result
-                    self.throttledWriteIPC(text: result)
-                }
+                guard !result.isEmpty else { return }
+                print("[Draft] \(targetLang.rawValue): \"\(result)\"")
+                self.streamViewModel?.updateDraft(result)
+                self.throttledWriteIPC(text: result)
             } catch {
                 if case ClaudeAPIService.APIError.rateLimited = error {
                     self.rateLimitUntil = Date().timeIntervalSince1970 + 30
-                    print("[Translate] RATE LIMITED — 30s")
+                    print("[Draft] RATE LIMITED — 30s")
                 } else if !(error is CancellationError) {
-                    print("[Translate] FAILED: \(error)")
+                    print("[Draft] FAILED: \(error)")
                 }
             }
         }
     }
 
-    private func triggerBatchRefine(language: TargetLanguage) {
-        guard !isRefining else { return }
-        guard let vm = streamViewModel, let translator = translator else { return }
-        let textToRefine = vm.pendingText
-        let chunkCount = vm.pendingChunksCount
-        let context = vm.refinedTail(maxWords: 30)
-        guard !textToRefine.isEmpty else { return }
+    // MARK: - Final Translation (Sonnet, quality)
 
-        isRefining = true
-        print("[Refine] Sending \(chunkCount) chunks for cleanup")
+    private func translateFinal(_ text: String) {
+        guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
+        let now = Date().timeIntervalSince1970
+        if now < rateLimitUntil { return }
 
-        Task {
-            defer { self.isRefining = false }
-            if let cleaned = await translator.cleanup(
-                text: textToRefine,
-                context: context,
-                language: language
-            ) {
-                await MainActor.run {
-                    vm.commitRefinedText(cleaned, chunkCount: chunkCount)
-                    print("[Refine] \"\(textToRefine)\" → \"\(cleaned)\"")
+        guard text.split(separator: " ").count >= 2 else { return }
+
+        draftTask?.cancel()
+
+        if translator == nil {
+            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
+            translator = SubtitleTranslator(apiKey: apiKey)
+        }
+        guard let translator else { return }
+
+        let prevTurn = lastFinalTranslation
+        let currentTopic = videoTopic
+
+        print("[Final] EN: \"\(text)\"")
+
+        finalTask = Task {
+            do {
+                let result = try await translator.translateStreaming(
+                    text: text,
+                    language: targetLang,
+                    model: .sonnet,
+                    previousTurn: prevTurn,
+                    topic: currentTopic,
+                    onToken: { _ in }
+                )
+                guard !Task.isCancelled else { return }
+                guard !result.isEmpty else { return }
+                print("[Final] \(targetLang.rawValue): \"\(result)\"")
+
+                self.lastFinalTranslation = (english: text, russian: result)
+                self.streamViewModel?.commitFinal(result)
+
+                self.accumulatedEnglish.append(text)
+                self.translationCount += 1
+                if self.translationCount == 3, self.videoTopic == nil {
+                    let combined = self.accumulatedEnglish.joined(separator: " ")
+                    Task {
+                        if let topic = await translator.detectTopic(from: combined) {
+                            self.videoTopic = topic
+                            print("[Topic] Detected: \"\(topic)\"")
+                        }
+                    }
+                }
+
+                self.throttledWriteIPC(text: result)
+            } catch {
+                if case ClaudeAPIService.APIError.rateLimited = error {
+                    self.rateLimitUntil = Date().timeIntervalSince1970 + 30
+                    print("[Final] RATE LIMITED — 30s")
+                } else if !(error is CancellationError) {
+                    print("[Final] FAILED: \(error)")
                 }
             }
-
-            // If more chunks accumulated while refining, go again
-            if let vm = self.streamViewModel, vm.pendingChunksCount >= 2 {
-                self.triggerBatchRefine(language: language)
-            }
         }
-    }
-
-    // MARK: - English Overlap Trimming (before sending to model)
-
-    /// Strip words from the START of `new` that appear at the END of `previous`.
-    /// This removes the sliding-window overlap so the model only translates new content.
-    private static func trimEnglishOverlap(new: String, previous: String) -> String {
-        guard !previous.isEmpty else { return new }
-
-        // Filter standalone punctuation tokens ("," "." etc.) — they break overlap matching
-        func realWords(_ text: String) -> [String] {
-            text.split(separator: " ").map(String.init).filter { $0.contains(where: { $0.isLetter }) }
-        }
-
-        let newWords = realWords(new)
-        let prevWords = realWords(previous)
-        let maxOverlap = min(newWords.count, prevWords.count, 10)
-
-        for overlapLen in stride(from: maxOverlap, through: 2, by: -1) {
-            let prevSuffix = prevWords.suffix(overlapLen)
-            let newPrefix = newWords.prefix(overlapLen)
-
-            let match = zip(prevSuffix, newPrefix).allSatisfy { a, b in
-                let aNorm = a.trimmingCharacters(in: .punctuationCharacters).lowercased()
-                let bNorm = b.trimmingCharacters(in: .punctuationCharacters).lowercased()
-                if aNorm == bNorm { return true }
-                // Prefix match for truncated words: "pill" ≈ "pillars"
-                let shorter = min(aNorm.count, bNorm.count)
-                guard shorter >= 4 else { return false }
-                return aNorm.prefix(shorter) == bNorm.prefix(shorter)
-            }
-
-            if match {
-                let remaining = Array(newWords.dropFirst(overlapLen))
-                // Return remaining even if short — caller's `count >= 4` guard handles it
-                return remaining.joined(separator: " ")
-            }
-        }
-
-        return new
-    }
-
-    // MARK: - Russian Overlap Trimming (after model response, backup)
-
-    /// Find where the END of `previous` matches the START of `new` and strip it.
-    /// "быть ключом к" at end of prev + "быть ключом к квантовой теории" → "квантовой теории"
-    private static func trimOverlap(new: String, previous: String) -> String {
-        guard !previous.isEmpty else { return new }
-
-        let newWords = new.split(separator: " ").map(String.init)
-        let prevWords = previous.split(separator: " ").map(String.init)
-        let maxOverlap = min(newWords.count, prevWords.count, 8)
-
-        for overlapLen in stride(from: maxOverlap, through: 1, by: -1) {
-            let prevSuffix = prevWords.suffix(overlapLen)
-            let newPrefix = newWords.prefix(overlapLen)
-
-            let match = zip(prevSuffix, newPrefix).allSatisfy { a, b in
-                Self.fuzzyWordMatch(a, b)
-            }
-
-            if match {
-                // Single-word overlap only for long words to avoid false positives ("и", "в", "что")
-                if overlapLen == 1 {
-                    let word = newWords[0].trimmingCharacters(in: .punctuationCharacters)
-                    guard word.count >= 5 else { continue }
-                }
-                let remaining = Array(newWords.dropFirst(overlapLen))
-                return remaining.joined(separator: " ")
-            }
-        }
-
-        return new
-    }
-
-    /// Fuzzy word comparison: handles Russian grammatical suffixes.
-    /// "глубокой" ≈ "глубокая", "теории" ≈ "теория"
-    private static func fuzzyWordMatch(_ a: String, _ b: String) -> Bool {
-        let aNorm = a.trimmingCharacters(in: .punctuationCharacters).lowercased()
-        let bNorm = b.trimmingCharacters(in: .punctuationCharacters).lowercased()
-        if aNorm == bNorm { return true }
-        guard aNorm.count >= 4, bNorm.count >= 4 else { return false }
-        // Drop last 2 chars to ignore grammatical endings
-        return aNorm.dropLast(2) == bNorm.dropLast(2)
     }
 
     // MARK: - IPC
