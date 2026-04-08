@@ -57,7 +57,7 @@ final class SentenceBuffer {
         }
 
         if isFinal {
-            checkBoundary()
+            checkBoundaryInChunk()
         } else {
             // Draft on volatile too — so user sees translation while speaking
             checkDraft()
@@ -65,9 +65,9 @@ final class SentenceBuffer {
     }
 
     func reportSilence(durationMs: Int) {
-        guard durationMs >= 700 else { return }
+        guard durationMs >= 600 else { return }
         guard confirmedWords.count >= 2 else { return }
-        let text = safeText
+        let text = confirmedWords.joined(separator: " ")
         guard !text.isEmpty else { return }
         onEvent?(.sentenceComplete(text: text))
         resetBuffer()
@@ -81,29 +81,44 @@ final class SentenceBuffer {
 
     // MARK: - Private
 
-    private func checkBoundary() {
-        // 1. Punctuation: last confirmed word ends with . ? !
-        if let lastWord = confirmedWords.last {
-            let trimmed = lastWord.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasSuffix(".") || trimmed.hasSuffix("?") || trimmed.hasSuffix("!") {
-                let text = safeText
-                guard !text.isEmpty else { return }
-                onEvent?(.sentenceComplete(text: text))
-                resetBuffer()
-                return
+    /// Scan all confirmed words for sentence-ending punctuation.
+    /// ASR often sends "them. One of" as a single chunk — the period is mid-chunk,
+    /// not on the last word. We split at every boundary found.
+    private func checkBoundaryInChunk() {
+        // Scan for punctuation anywhere in the buffer
+        if let splitIdx = confirmedWords.lastIndex(where: { word in
+            let trimmed = word.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasSuffix(".") || trimmed.hasSuffix("?") || trimmed.hasSuffix("!")
+        }) {
+            // Everything up to and including the punctuated word = complete sentence
+            let sentenceWords = Array(confirmedWords.prefix(through: splitIdx))
+            let remainingWords = Array(confirmedWords.suffix(from: confirmedWords.index(after: splitIdx)))
+
+            let sentenceText = sentenceWords.joined(separator: " ")
+            guard !sentenceText.isEmpty else { return }
+
+            // Commit the sentence
+            confirmedWords = remainingWords
+            lastDraftWordCount = 0
+            onEvent?(.sentenceComplete(text: sentenceText))
+
+            // If remaining words exist, check for more boundaries (recursive)
+            if !confirmedWords.isEmpty {
+                checkBoundaryInChunk()
             }
+            return
         }
 
-        // 2. Buffer overflow: >= 25 confirmed words
+        // No punctuation found — check overflow
         if confirmedWords.count >= 25 {
-            let text = safeText
+            let text = confirmedWords.joined(separator: " ")
             guard !text.isEmpty else { return }
             onEvent?(.sentenceComplete(text: text))
             resetBuffer()
             return
         }
 
-        // 3. Also check draft on final words
+        // No boundary — check draft
         checkDraft()
     }
 
