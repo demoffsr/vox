@@ -44,9 +44,10 @@ final class SentenceBuffer {
 
     func accumulateWords(_ text: String, isFinal: Bool) {
         if isFinal {
-            confirmedWords += text.split(separator: " ").map(String.init)
+            let words = text.split(separator: " ").map(String.init)
+            confirmedWords += words
             volatileText = ""
-            wordsSinceLastDraft += text.split(separator: " ").count
+            wordsSinceLastDraft += words.count
         } else {
             volatileText = text
         }
