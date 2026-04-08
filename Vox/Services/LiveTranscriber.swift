@@ -57,6 +57,14 @@ final class LiveTranscriber: @unchecked Sendable {
     /// Called with (text, isFinal). Volatile = word-by-word. Final = confirmed.
     nonisolated(unsafe) var onSubtitle: ((_ text: String, _ isFinal: Bool) -> Void)?
 
+    /// Called when speech pause is detected. Parameter: duration in milliseconds.
+    nonisolated(unsafe) var onSilence: ((_ durationMs: Int) -> Void)?
+
+    // Silence tracking
+    private var silenceStartTime: TimeInterval = 0
+    private var isSilent: Bool = false
+    private var silenceFired: Bool = false  // prevent re-firing until speech resumes
+
     // MARK: - Public API
 
     /// Start transcription.
@@ -282,6 +290,9 @@ final class LiveTranscriber: @unchecked Sendable {
         lpX1 = 0; lpX2 = 0; lpY1 = 0; lpY2 = 0
         lpConfiguredRate = 0
         preEmphPrev = 0
+        silenceStartTime = 0
+        isSilent = false
+        silenceFired = false
         lock.unlock()
 
         task?.cancel()
@@ -301,8 +312,36 @@ final class LiveTranscriber: @unchecked Sendable {
         applyHighPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
         applyLowPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
         applyPreEmphasis(samples, count: count)
-        guard passesSpeechGate(samples, count: count) else { return }
-        applyRMSNormalization(samples, count: count)
+
+        // Compute RMS for speech gate AND silence detection
+        var rms: Float = 0
+        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
+
+        let isSpeech = rms > 0.005
+
+        if isSpeech {
+            // Speech resumed — reset silence tracking
+            if isSilent {
+                isSilent = false
+                silenceFired = false
+            }
+            applyRMSNormalization(samples, count: count)
+        } else {
+            // Silence detected
+            let now = Date().timeIntervalSince1970
+            if !isSilent {
+                isSilent = true
+                silenceStartTime = now
+            } else if !silenceFired {
+                let elapsed = Int((now - silenceStartTime) * 1000)
+                if elapsed >= 700 {
+                    silenceFired = true
+                    onSilence?(elapsed)
+                }
+            }
+            // Don't normalize silence — original gate behavior: return without processing
+            return
+        }
     }
 
     /// Butterworth 2nd-order high-pass at 80 Hz — removes sub-bass (kick drums, 808s)
@@ -369,17 +408,6 @@ final class LiveTranscriber: @unchecked Sendable {
             samples[i] = x - coeff * preEmphPrev
             preEmphPrev = x
         }
-    }
-
-    /// Speech gate — checks if the buffer contains enough energy to be speech.
-    /// Prevents the RMS normalizer from amplifying silence/music-only segments,
-    /// which causes the recognizer to hallucinate words from noise.
-    private func passesSpeechGate(_ samples: UnsafeMutablePointer<Float>, count: Int) -> Bool {
-        var rms: Float = 0
-        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
-        // After band-pass + pre-emphasis, speech typically has RMS > 0.005.
-        // Below that it's background noise or very quiet music.
-        return rms > 0.005
     }
 
     /// Normalizes RMS to ~0.1 so quiet speech and loud music hit the recognizer at consistent levels.
