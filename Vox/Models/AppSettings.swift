@@ -61,6 +61,9 @@ final class AppSettings {
         }
     }
 
+    /// Installed speech recognition locale codes (e.g. "en", "ru"). Updated at launch and on manual refresh.
+    var installedLocales: Set<String> = []
+
     var subtitleTranslationLanguage: TargetLanguage? {
         get {
             guard let raw = UserDefaults.standard.string(forKey: "subtitleTranslationLanguage") else { return nil }

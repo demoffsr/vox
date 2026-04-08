@@ -6,18 +6,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = AppCoordinator()
     let subtitleService = SubtitleService()
     private var settingsWindow: NSWindow?
-    /// Installed speech recognition locales (loaded at launch).
-    var installedLocales: Set<String> = []
+    /// Re-check installed speech locales and store in AppSettings.
+    func refreshInstalledLocales() async {
+        let dictLocales = await DictationTranscriber.installedLocales
+        let speechLocales = await SpeechTranscriber.installedLocales
+        let allCodes = (dictLocales + speechLocales).compactMap { $0.language.languageCode?.identifier }
+        AppSettings.shared.installedLocales = Set(allCodes)
+        print("[Vox] Installed speech locales — Dictation: \(dictLocales.map(\.identifier)), SpeechTranscriber: \(speechLocales.map(\.identifier))")
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Load installed speech locales for the Subtitle Language menu
-        Task {
-            let dictLocales = await DictationTranscriber.installedLocales
-            let speechLocales = await SpeechTranscriber.installedLocales
-            let allCodes = (dictLocales + speechLocales).compactMap { $0.language.languageCode?.identifier }
-            self.installedLocales = Set(allCodes)
-            print("[Vox] Installed speech locales — Dictation: \(dictLocales.map(\.identifier)), SpeechTranscriber: \(speechLocales.map(\.identifier))")
-        }
+        Task { await refreshInstalledLocales() }
         // Register this object as the Services provider
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -84,77 +83,13 @@ struct VoxApp: App {
 
     var body: some Scene {
         MenuBarExtra("Vox", systemImage: "bubble.left.fill") {
-            Button("Open Vox") {
-                appDelegate.coordinator.showLastOrTranslate()
-            }
-            Button("Translate Selection") {
-                appDelegate.coordinator.translate()
-            }
-            Divider()
-            Button(appDelegate.subtitleService.isRunning ? "Stop Live Subtitles" : "Start Live Subtitles") {
-                Task {
-                    if appDelegate.subtitleService.isRunning {
-                        await appDelegate.subtitleService.stop()
-                    } else {
-                        let settings = AppSettings.shared
-                        appDelegate.subtitleService.subtitleLocale = settings.subtitleLanguage.locale
-                        await appDelegate.subtitleService.start()
-                    }
-                }
-            }
-            Menu("Subtitle Language") {
-                let currentLang = AppSettings.shared.subtitleLanguage
-                let installed = appDelegate.installedLocales
-                let availableLanguages = SubtitleLanguage.allCases.filter { lang in
-                    installed.isEmpty || installed.contains(lang.languageCode)
-                }
-                ForEach(availableLanguages) { lang in
-                    Button {
-                        AppSettings.shared.subtitleLanguage = lang
-                        appDelegate.subtitleService.subtitleLocale = lang.locale
-                        if appDelegate.subtitleService.isRunning {
-                            Task {
-                                await appDelegate.subtitleService.stop()
-                                await appDelegate.subtitleService.start()
-                            }
-                        }
-                    } label: {
-                        let check = lang == currentLang ? "✓ " : "   "
-                        Text("\(check)\(lang.flag) \(lang.displayName)")
-                    }
-                }
-                if availableLanguages.count < SubtitleLanguage.allCases.count {
-                    Divider()
-                    Button("Add more languages...") {
-                        // Open Keyboard settings where Dictation languages are configured
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                }
-            }
-            Menu("Translate Subtitles") {
-                Button("Off") {
-                    AppSettings.shared.subtitleTranslationLanguage = nil
-                }
-                Divider()
-                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
-                    Button("\(lang.flag) \(lang.rawValue)") {
-                        AppSettings.shared.subtitleTranslationLanguage = lang
-                    }
-                }
-            }
-            Divider()
-            Button("Settings...") {
-                appDelegate.openSettings()
-            }
-            .keyboardShortcut(",", modifiers: .command)
-            Divider()
-            Button("Quit Vox") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q")
+            MenuPopoverView(
+                coordinator: appDelegate.coordinator,
+                subtitleService: appDelegate.subtitleService,
+                refreshLocales: { [self] in await appDelegate.refreshInstalledLocales() },
+                openSettings: { [self] in appDelegate.openSettings() }
+            )
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
     }
 }
