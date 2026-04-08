@@ -2,22 +2,19 @@ import AppKit
 import Carbon.HIToolbox
 
 final class HotkeyService {
-    private var hotkeyRef: EventHotKeyRef?
+    private var hotkeyRefs: [UInt32: EventHotKeyRef] = [:]
     private var eventHandlerRef: EventHandlerRef?
-    private let onTrigger: () -> Void
+    private var callbacks: [UInt32: () -> Void] = [:]
+    private var nextID: UInt32 = 1
 
-    // Store callback pointer so Carbon can reach us
     private static var current: HotkeyService?
 
-    init(onTrigger: @escaping () -> Void) {
-        self.onTrigger = onTrigger
-    }
+    init() {}
 
     func start() {
         print("[Vox] HotkeyService starting with Carbon API...")
         HotkeyService.current = self
 
-        // Register Carbon event handler
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -26,7 +23,19 @@ final class HotkeyService {
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
             { (_, event, _) -> OSStatus in
-                HotkeyService.current?.handleHotKey()
+                guard let event else { return OSStatus(eventNotHandledErr) }
+                var hotkeyID = EventHotKeyID()
+                let result = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotkeyID
+                )
+                guard result == noErr else { return result }
+                HotkeyService.current?.handleHotKey(id: hotkeyID.id)
                 return noErr
             },
             1,
@@ -35,29 +44,45 @@ final class HotkeyService {
             &eventHandlerRef
         )
         print("[Vox] InstallEventHandler status: \(status)")
+    }
 
-        // Register Cmd+T hotkey
+    /// Register a global hotkey. Returns the hotkey ID for later unregistration.
+    @discardableResult
+    func register(keyCode: Int, modifiers: Int, handler: @escaping () -> Void) -> UInt32 {
+        let id = nextID
+        nextID += 1
+        callbacks[id] = handler
+
         let hotkeyID = EventHotKeyID(
             signature: OSType(0x564F5821), // "VOX!"
-            id: 1
+            id: id
         )
 
-        let regStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_T),
-            UInt32(cmdKey),
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            UInt32(keyCode),
+            UInt32(modifiers),
             hotkeyID,
             GetApplicationEventTarget(),
             0,
-            &hotkeyRef
+            &ref
         )
-        print("[Vox] RegisterEventHotKey status: \(regStatus) (0 = success)")
+        print("[Vox] RegisterEventHotKey id=\(id) status: \(status)")
+
+        if let ref {
+            hotkeyRefs[id] = ref
+        }
+
+        return id
     }
 
     func stop() {
-        if let hotkeyRef {
-            UnregisterEventHotKey(hotkeyRef)
-            self.hotkeyRef = nil
+        for (_, ref) in hotkeyRefs {
+            UnregisterEventHotKey(ref)
         }
+        hotkeyRefs.removeAll()
+        callbacks.removeAll()
+
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
             self.eventHandlerRef = nil
@@ -65,10 +90,11 @@ final class HotkeyService {
         HotkeyService.current = nil
     }
 
-    private func handleHotKey() {
-        print("[Vox] Carbon hotkey triggered!")
-        DispatchQueue.main.async { [weak self] in
-            self?.onTrigger()
+    private func handleHotKey(id: UInt32) {
+        print("[Vox] Carbon hotkey triggered! id=\(id)")
+        guard let callback = callbacks[id] else { return }
+        DispatchQueue.main.async {
+            callback()
         }
     }
 

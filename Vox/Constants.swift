@@ -203,3 +203,9 @@ enum TargetLanguage: String, CaseIterable, Identifiable {
         }
     }
 }
+
+enum SubtitleDisplayMode: String, CaseIterable, Identifiable {
+    case lecture = "Lecture"
+    case cinema = "Cinema"
+    var id: String { rawValue }
+}

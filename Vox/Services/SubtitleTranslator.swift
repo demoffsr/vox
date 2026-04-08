@@ -197,6 +197,133 @@ final class SubtitleTranslator {
         }
     }
 
+    /// Summarize the translated text: extract key points as bullet-point summary.
+    /// Non-streaming Sonnet request. Returns summary text, or nil on failure.
+    func summarize(text: String, topic: String?, language: TargetLanguage) async -> String? {
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 30
+
+        let langName: String
+        switch language {
+        case .auto, .russian: langName = "Russian"
+        case .english: langName = "English"
+        case .spanish: langName = "Spanish"
+        case .french: langName = "French"
+        case .german: langName = "German"
+        case .chinese: langName = "Simplified Chinese"
+        case .japanese: langName = "Japanese"
+        }
+
+        var system = """
+        /* prompt redacted */ \(langName) subtitles as a concise bullet-point summary.
+        
+        
+        
+        Output in \(langName).  (•) for each point.
+        
+        """
+        if let topic {
+            system += "\nVideo topic: \(topic)"
+        }
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.sonnet.rawValue,
+            "max_tokens": 4096,
+            "stream": false,
+            "system": system,
+            "messages": [["role": "user", "content": text]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            let summary = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return summary.isEmpty ? nil : summary
+        } catch {
+            print("[Summarize] FAILED: \(error)")
+            return nil
+        }
+    }
+
+    /// Format translated text as structured study/lecture notes.
+    /// Non-streaming Sonnet request. Returns formatted notes, or nil on failure.
+    func studyNotes(text: String, topic: String?, language: TargetLanguage) async -> String? {
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 30
+
+        let langName: String
+        switch language {
+        case .auto, .russian: langName = "Russian"
+        case .english: langName = "English"
+        case .spanish: langName = "Spanish"
+        case .french: langName = "French"
+        case .german: langName = "German"
+        case .chinese: langName = "Simplified Chinese"
+        case .japanese: langName = "Japanese"
+        }
+
+        var system = """
+         \(langName) /* prompt redacted */
+        Include:
+        - 
+        - 
+        - 
+        - 
+        - 
+         Output in \(langName).
+        
+        """
+        if let topic {
+            system += "\nVideo topic: \(topic)"
+        }
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.sonnet.rawValue,
+            "max_tokens": 4096,
+            "stream": false,
+            "system": system,
+            "messages": [["role": "user", "content": text]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            let notes = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return notes.isEmpty ? nil : notes
+        } catch {
+            print("[StudyNotes] FAILED: \(error)")
+            return nil
+        }
+    }
+
     /// Post-process a batch of translated text: fix punctuation, capitalization, sentence breaks.
     /// Uses Haiku for speed. Returns cleaned text, or nil on failure.
     func cleanup(text: String, context: String, language: TargetLanguage) async -> String? {

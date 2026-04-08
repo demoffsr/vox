@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        coordinator.subtitleService = subtitleService
+
         Task { await refreshInstalledLocales() }
         // Register this object as the Services provider
         NSApp.servicesProvider = self

@@ -6,7 +6,7 @@ import SwiftUI
 final class TranslationStreamPanel: NSPanel {
     private let viewModel: TranslationStreamViewModel
     var onClose: (() -> Void)?
-    var onPolish: (() -> Void)?
+    var onCustomize: ((ProcessingMode) -> Void)?
 
     init(viewModel: TranslationStreamViewModel) {
         self.viewModel = viewModel
@@ -45,8 +45,8 @@ final class TranslationStreamPanel: NSPanel {
             onLanguageChanged: { [weak self] lang in
                 self?.onLanguageChanged(lang)
             },
-            onPolish: { [weak self] in
-                self?.onPolish?()
+            onCustomize: { [weak self] mode in
+                self?.onCustomize?(mode)
             },
             onClose: { [weak self] in
                 self?.dismiss()

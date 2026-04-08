@@ -38,6 +38,10 @@ final class SubtitleService {
         AppSettings.shared.subtitleTranslationLanguage != nil
     }
 
+    private var displayMode: SubtitleDisplayMode {
+        AppSettings.shared.subtitleDisplayMode
+    }
+
     func start() async {
         guard !isRunning else { return }
 
@@ -100,7 +104,7 @@ final class SubtitleService {
 
         isRunning = true
 
-        if initialTranslationActive {
+        if initialTranslationActive && displayMode == .lecture {
             openTranslationStream()
         }
 
@@ -159,7 +163,9 @@ final class SubtitleService {
                 finalTask = nil
                 print("[SubtitleService] Switched translation language to \(language.rawValue)")
             } else {
-                openTranslationStream()
+                if displayMode == .lecture {
+                    openTranslationStream()
+                }
                 print("[SubtitleService] Translation enabled: \(language.rawValue)")
             }
         } else {
@@ -183,6 +189,29 @@ final class SubtitleService {
         }
     }
 
+    func switchDisplayMode(to mode: SubtitleDisplayMode) {
+        guard mode != AppSettings.shared.subtitleDisplayMode else { return }
+        AppSettings.shared.subtitleDisplayMode = mode
+
+        switch mode {
+        case .cinema:
+            streamViewModel?.isActive = false
+            streamPanel?.onClose = nil
+            streamPanel?.dismiss()
+            streamViewModel = nil
+            streamPanel = nil
+            subtitlePanel.clearTranslation()
+            print("[SubtitleService] Switched to Cinema mode")
+
+        case .lecture:
+            subtitlePanel.clearTranslation()
+            if translationActive {
+                openTranslationStream()
+            }
+            print("[SubtitleService] Switched to Lecture mode")
+        }
+    }
+
     private func openTranslationStream() {
         let vm = TranslationStreamViewModel()
         vm.isActive = true
@@ -190,8 +219,8 @@ final class SubtitleService {
         streamViewModel = vm
 
         let panel = TranslationStreamPanel(viewModel: vm)
-        panel.onPolish = { [weak self] in
-            self?.polishTranslation()
+        panel.onCustomize = { [weak self] mode in
+            self?.processTranslation(mode: mode)
         }
         panel.onClose = { [weak self] in
             Task { @MainActor in
@@ -203,11 +232,12 @@ final class SubtitleService {
         panel.showCentered()
     }
 
-    // MARK: - Polish
+    // MARK: - Process (Polish / Summarize / Study Mode)
 
-    func polishTranslation() {
+    func processTranslation(mode: ProcessingMode) {
         guard let vm = streamViewModel, !vm.accumulatedText.isEmpty else { return }
         guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
+        guard !vm.isProcessing(mode: mode) else { return }
 
         if translator == nil {
             guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
@@ -217,10 +247,10 @@ final class SubtitleService {
 
         let text = vm.accumulatedText
         let wordCount = text.split(separator: " ").count
-        vm.isPolishing = true
+        vm.setProcessing(mode, true)
 
         Task {
-            defer { vm.isPolishing = false }
+            defer { vm.setProcessing(mode, false) }
 
             if videoTopic == nil {
                 let topicSource = accumulatedEnglish.isEmpty ? text : accumulatedEnglish.joined(separator: " ")
@@ -235,18 +265,25 @@ final class SubtitleService {
             }
 
             let topicLog = videoTopic.map { "topic: \"\($0)\"" } ?? "no topic"
-            print("[Polish] Sending \(wordCount) words to Sonnet (\(topicLog))")
+            print("[\(mode.rawValue)] Sending \(wordCount) words to Sonnet (\(topicLog))")
 
-            if let polished = await translator.polish(
-                text: text,
-                topic: videoTopic,
-                language: targetLang
-            ) {
-                let polishedWordCount = polished.split(separator: " ").count
-                print("[Polish] Done: \(polishedWordCount) words returned")
-                vm.replaceAll(polished)
+            let result: String?
+            switch mode {
+            case .polish:
+                result = await translator.polish(text: text, topic: videoTopic, language: targetLang)
+            case .summarize:
+                result = await translator.summarize(text: text, topic: videoTopic, language: targetLang)
+            case .studyMode:
+                result = await translator.studyNotes(text: text, topic: videoTopic, language: targetLang)
+            }
+
+            if let result {
+                let resultWordCount = result.split(separator: " ").count
+                print("[\(mode.rawValue)] Done: \(resultWordCount) words returned")
+                vm.setTabContent(mode.targetTab, text: result)
+                vm.activeTab = mode.targetTab
             } else {
-                print("[Polish] FAILED: no result")
+                print("[\(mode.rawValue)] FAILED: no result")
             }
         }
     }
@@ -286,7 +323,12 @@ final class SubtitleService {
                 guard !Task.isCancelled else { return }
                 guard !result.isEmpty else { return }
                 print("[Draft] \(targetLang.rawValue): \"\(result)\"")
-                self.streamViewModel?.updateDraft(result)
+                switch self.displayMode {
+                case .lecture:
+                    self.streamViewModel?.updateDraft(result)
+                case .cinema:
+                    self.subtitlePanel.showTranslation(result)
+                }
                 self.throttledWriteIPC(text: result)
             } catch {
                 if case ClaudeAPIService.APIError.rateLimited = error {
@@ -336,7 +378,12 @@ final class SubtitleService {
                 print("[Final] \(targetLang.rawValue): \"\(result)\"")
 
                 self.lastFinalTranslation = (english: text, russian: result)
-                self.streamViewModel?.commitFinal(result)
+                switch self.displayMode {
+                case .lecture:
+                    self.streamViewModel?.commitFinal(result)
+                case .cinema:
+                    self.subtitlePanel.showTranslation(result)
+                }
 
                 self.accumulatedEnglish.append(text)
                 self.translationCount += 1

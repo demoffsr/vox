@@ -1,15 +1,17 @@
 // Vox/Views/TranslationStreamView.swift
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TranslationStreamView: View {
     @Bindable var viewModel: TranslationStreamViewModel
     @State private var copied = false
-    @State private var polished = false
     @State private var showLanguagePicker = false
     @State private var hoveredLanguage: TargetLanguage?
+    @State private var hoveredTab: StreamTab?
+    @State private var draggingTab: StreamTab?
     @State private var isNearBottom = true
     var onLanguageChanged: ((TargetLanguage) -> Void)?
-    var onPolish: (() -> Void)?
+    var onCustomize: ((ProcessingMode) -> Void)?
     var onClose: (() -> Void)?
 
     var body: some View {
@@ -22,19 +24,24 @@ struct TranslationStreamView: View {
                 gradientDivider
             }
 
+            if viewModel.availableTabs.count > 1 {
+                tabBar
+                gradientDivider
+            }
+
             streamContent
             gradientDivider
             bottomBar
         }
         .environment(\.colorScheme, .dark)
         .animation(.easeOut(duration: 0.2), value: showLanguagePicker)
+        .animation(.easeOut(duration: 0.2), value: viewModel.availableTabs.count)
     }
 
     // MARK: - Title Bar
 
     private var titleBar: some View {
         HStack(spacing: 8) {
-            // Language picker pill
             Button(action: {
                 withAnimation(.easeOut(duration: 0.2)) {
                     showLanguagePicker.toggle()
@@ -56,7 +63,6 @@ struct TranslationStreamView: View {
             }
             .buttonStyle(.plain)
 
-            // Status indicator
             if viewModel.isActive {
                 HStack(spacing: 5) {
                     Circle()
@@ -71,7 +77,6 @@ struct TranslationStreamView: View {
 
             Spacer()
 
-            // Close button
             Button(action: { onClose?() }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -83,6 +88,73 @@ struct TranslationStreamView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    // MARK: - Tab Bar (draggable)
+
+    private var tabBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(viewModel.availableTabs) { tab in
+                    tabButton(for: tab)
+                        .onDrag {
+                            draggingTab = tab
+                            return NSItemProvider(object: tab.rawValue as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: TabDropDelegate(
+                            tab: tab,
+                            viewModel: viewModel,
+                            draggingTab: $draggingTab
+                        ))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func tabButton(for tab: StreamTab) -> some View {
+        let isActive = viewModel.activeTab == tab
+        let isProcessing = viewModel.isProcessing(for: tab)
+        let isDragging = draggingTab == tab
+
+        return Button(action: { viewModel.activeTab = tab }) {
+            HStack(spacing: 5) {
+                if isProcessing {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.6)
+                } else {
+                    Image(systemName: tab.icon)
+                        .font(.system(size: 10, weight: .medium))
+                }
+                Text(tab.rawValue)
+                    .font(.system(size: 11, weight: isActive ? .semibold : .medium))
+
+                if tab != .subtitles && !isProcessing {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.25))
+                        .onTapGesture {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                viewModel.dismissTab(tab)
+                            }
+                        }
+                }
+            }
+            .foregroundStyle(isActive ? .white.opacity(0.9) : .white.opacity(0.4))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isActive ? .white.opacity(0.12) : hoveredTab == tab ? .white.opacity(0.06) : .clear)
+            )
+            .opacity(isDragging ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered in
+            hoveredTab = isHovered ? tab : nil
+        }
     }
 
     // MARK: - Inline Language Picker
@@ -139,25 +211,10 @@ struct TranslationStreamView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    if viewModel.accumulatedText.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.white.opacity(0.12))
-                            Text("Waiting for speech...")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.white.opacity(0.25))
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.vertical, 50)
+                    if viewModel.activeTabIsSubtitles {
+                        subtitlesContent
                     } else {
-                        styledText
-                            .font(.system(size: 15))
-                            .lineSpacing(5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
+                        processedContent
                     }
 
                     Color.clear
@@ -166,7 +223,7 @@ struct TranslationStreamView: View {
                 }
             }
             .onChange(of: viewModel.accumulatedText) {
-                if isNearBottom {
+                if isNearBottom && viewModel.activeTabIsSubtitles {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
@@ -180,6 +237,50 @@ struct TranslationStreamView: View {
             }
         }
         .frame(minHeight: 100)
+    }
+
+    @ViewBuilder
+    private var subtitlesContent: some View {
+        if viewModel.accumulatedText.isEmpty {
+            VStack(spacing: 12) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.white.opacity(0.12))
+                Text("Waiting for speech...")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.25))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 50)
+        } else {
+            styledText
+                .font(.system(size: 15))
+                .lineSpacing(5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+        }
+    }
+
+    @ViewBuilder
+    private var processedContent: some View {
+        let text = viewModel.displayText
+        if text.isEmpty {
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Processing...")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.25))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 50)
+        } else {
+            MarkdownTextView(text: text)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+        }
     }
 
     // MARK: - Styled Text (final = bright, draft = dim)
@@ -207,7 +308,6 @@ struct TranslationStreamView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            // Clear button
             Button(action: { viewModel.clear() }) {
                 HStack(spacing: 6) {
                     Image(systemName: "trash")
@@ -223,41 +323,17 @@ struct TranslationStreamView: View {
             .buttonStyle(.plain)
             .disabled(viewModel.accumulatedText.isEmpty)
 
-            // Polish button
-            Button(action: polishAction) {
-                HStack(spacing: 6) {
-                    if viewModel.isPolishing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.7)
-                    } else {
-                        Image(systemName: polished ? "checkmark" : "wand.and.stars")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    Text(viewModel.isPolishing ? "Polishing..." : polished ? "Polished!" : "Polish")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(polished ? .green : .white.opacity(0.5))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(Capsule().fill(polished ? .green.opacity(0.15) : .white.opacity(0.08)))
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.accumulatedText.isEmpty || viewModel.isPolishing)
-            .animation(.easeInOut(duration: 0.2), value: polished)
-            .animation(.easeInOut(duration: 0.2), value: viewModel.isPolishing)
+            customizeButton
 
             Spacer()
 
-            // Word count
-            if !viewModel.accumulatedText.isEmpty {
-                let wordCount = viewModel.accumulatedText.split(separator: " ").count
+            if !viewModel.displayText.isEmpty {
+                let wordCount = viewModel.displayText.split(separator: " ").count
                 Text("\(wordCount) words")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.2))
             }
 
-            // Copy button
             Button(action: copyAction) {
                 HStack(spacing: 6) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
@@ -271,11 +347,47 @@ struct TranslationStreamView: View {
                 .background(Capsule().fill(copied ? .green.opacity(0.15) : .white.opacity(0.08)))
             }
             .buttonStyle(.plain)
-            .disabled(viewModel.accumulatedText.isEmpty)
+            .disabled(viewModel.displayText.isEmpty)
             .animation(.easeInOut(duration: 0.2), value: copied)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    private var customizeButton: some View {
+        Menu {
+            ForEach(ProcessingMode.allCases) { mode in
+                Button(action: { onCustomize?(mode) }) {
+                    Label {
+                        Text(viewModel.isProcessing(mode: mode) ? "\(mode.rawValue)..." : mode.rawValue)
+                    } icon: {
+                        Image(systemName: mode.icon)
+                    }
+                }
+                .disabled(viewModel.accumulatedText.isEmpty || viewModel.isProcessing(mode: mode))
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.isAnyProcessing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                } else {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(viewModel.isAnyProcessing ? "Processing..." : "Customize")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(.white.opacity(0.5))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(.white.opacity(0.08)))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(viewModel.accumulatedText.isEmpty)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.isAnyProcessing)
     }
 
     // MARK: - Helpers
@@ -292,26 +404,164 @@ struct TranslationStreamView: View {
             .frame(height: 1)
     }
 
-    private func polishAction() {
-        onPolish?()
-        // Success animation is triggered from outside when polish completes;
-        // observe isPolishing going from true → false
-        Task {
-            // Wait for polishing to start
-            while !viewModel.isPolishing { try? await Task.sleep(for: .milliseconds(50)) }
-            // Wait for polishing to finish
-            while viewModel.isPolishing { try? await Task.sleep(for: .milliseconds(100)) }
-            polished = true
-            try? await Task.sleep(for: .seconds(1.5))
-            polished = false
-        }
-    }
-
     private func copyAction() {
         viewModel.copyAll()
         copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             copied = false
         }
+    }
+}
+
+// MARK: - Tab Drag & Drop
+
+struct TabDropDelegate: DropDelegate {
+    let tab: StreamTab
+    let viewModel: TranslationStreamViewModel
+    @Binding var draggingTab: StreamTab?
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingTab = nil
+        return true
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = draggingTab, dragging != tab else { return }
+        guard let fromIndex = viewModel.tabOrder.firstIndex(of: dragging),
+              let toIndex = viewModel.tabOrder.firstIndex(of: tab) else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            viewModel.tabOrder.move(fromOffsets: IndexSet(integer: fromIndex), toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+}
+
+// MARK: - Markdown Text Renderer
+
+struct MarkdownTextView: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(parseBlocks().enumerated()), id: \.offset) { _, block in
+                blockView(block)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
+    }
+
+    private enum Block {
+        case h1(String)
+        case h2(String)
+        case h3(String)
+        case bullet(String)
+        case blank
+        case paragraph(String)
+    }
+
+    private func parseBlocks() -> [Block] {
+        let lines = text.components(separatedBy: "\n")
+        var blocks: [Block] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                blocks.append(.blank)
+            } else if trimmed.hasPrefix("### ") {
+                blocks.append(.h3(String(trimmed.dropFirst(4))))
+            } else if trimmed.hasPrefix("## ") {
+                blocks.append(.h2(String(trimmed.dropFirst(3))))
+            } else if trimmed.hasPrefix("# ") {
+                blocks.append(.h1(String(trimmed.dropFirst(2))))
+            } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("• ") || trimmed.hasPrefix("* ") {
+                let content = String(trimmed.dropFirst(2))
+                blocks.append(.bullet(content))
+            } else {
+                blocks.append(.paragraph(trimmed))
+            }
+        }
+        return blocks
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: Block) -> some View {
+        switch block {
+        case .h1(let text):
+            inlineMarkdown(text)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(.white.opacity(0.95))
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+        case .h2(let text):
+            inlineMarkdown(text)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.top, 6)
+                .padding(.bottom, 1)
+        case .h3(let text):
+            inlineMarkdown(text)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.top, 4)
+        case .bullet(let text):
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("•")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                inlineMarkdown(text)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineSpacing(4)
+            }
+            .padding(.leading, 4)
+        case .blank:
+            Spacer()
+                .frame(height: 8)
+        case .paragraph(let text):
+            inlineMarkdown(text)
+                .font(.system(size: 15))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineSpacing(4)
+        }
+    }
+
+    private func inlineMarkdown(_ string: String) -> Text {
+        // Parse **bold** and *italic* markers
+        var result = Text("")
+        var remaining = string[...]
+
+        while !remaining.isEmpty {
+            if remaining.hasPrefix("**") {
+                remaining = remaining.dropFirst(2)
+                if let endRange = remaining.range(of: "**") {
+                    let bold = String(remaining[..<endRange.lowerBound])
+                    result = result + Text(bold).bold()
+                    remaining = remaining[endRange.upperBound...]
+                } else {
+                    result = result + Text("**")
+                }
+            } else if remaining.hasPrefix("*") {
+                remaining = remaining.dropFirst(1)
+                if let endRange = remaining.range(of: "*") {
+                    let italic = String(remaining[..<endRange.lowerBound])
+                    result = result + Text(italic).italic()
+                    remaining = remaining[endRange.upperBound...]
+                } else {
+                    result = result + Text("*")
+                }
+            } else {
+                // Consume until next markdown marker or end
+                var plain = ""
+                while !remaining.isEmpty && !remaining.hasPrefix("*") {
+                    plain.append(remaining.removeFirst())
+                }
+                result = result + Text(plain)
+            }
+        }
+
+        return result
     }
 }

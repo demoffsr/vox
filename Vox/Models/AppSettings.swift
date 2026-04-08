@@ -73,4 +73,14 @@ final class AppSettings {
             UserDefaults.standard.set(newValue?.rawValue, forKey: "subtitleTranslationLanguage")
         }
     }
+
+    var subtitleDisplayMode: SubtitleDisplayMode {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "subtitleDisplayMode") ?? SubtitleDisplayMode.lecture.rawValue
+            return SubtitleDisplayMode(rawValue: raw) ?? .lecture
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "subtitleDisplayMode")
+        }
+    }
 }
