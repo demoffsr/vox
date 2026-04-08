@@ -22,7 +22,7 @@ actor SystemAudioCapture {
     // MARK: - State
 
     private var stream: SCStream?
-    private let outputDelegate = AudioOutputDelegate()
+    private var outputDelegate = AudioOutputDelegate()
 
     /// Stream of audio buffers for transcription.
     var audioBuffers: AsyncStream<AVAudioPCMBuffer> {
@@ -34,6 +34,9 @@ actor SystemAudioCapture {
     /// Start capturing system-wide audio.
     /// - Parameter audioFormat: Target audio format from SpeechAnalyzer. If nil, captures at system native rate.
     func startCapture(audioFormat: AVAudioFormat? = nil) async throws {
+        // Fresh delegate — old one's AsyncStream is finished after stopCapture()
+        outputDelegate = AudioOutputDelegate()
+
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
 
         guard let display = content.displays.first else {
