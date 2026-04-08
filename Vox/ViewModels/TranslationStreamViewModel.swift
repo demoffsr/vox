@@ -6,6 +6,7 @@ final class TranslationStreamViewModel {
     private var refinedText: String = ""
     private var pendingChunks: [String] = []
     var isActive: Bool = false
+    var isPolishing: Bool = false
     var selectedLanguage: TargetLanguage = .russian
 
     /// Full display text: refined prefix + pending raw chunks.
@@ -60,6 +61,11 @@ final class TranslationStreamViewModel {
         guard !refinedText.isEmpty else { return "" }
         let words = refinedText.split(separator: " ")
         return words.suffix(maxWords).joined(separator: " ")
+    }
+
+    func replaceAll(_ text: String) {
+        refinedText = text
+        pendingChunks.removeAll()
     }
 
     func clear() {

@@ -30,6 +30,9 @@ final class SubtitleService {
     private var isRefining = false
     private var vocabularyUpdateCounter = 0
     private var isFirstTranslation = true
+    private var videoTopic: String?
+    private var translationCount = 0
+    private var accumulatedEnglish: [String] = []
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -38,15 +41,18 @@ final class SubtitleService {
     /// The current subtitle language locale identifier (e.g. "en-US", "ru-RU").
     var subtitleLocale: Locale = Locale(identifier: "en-US")
 
+    /// Live-computed: reads AppSettings each time so mode switches are immediate.
+    private var translationActive: Bool {
+        AppSettings.shared.subtitleTranslationLanguage != nil
+    }
+
     func start() async {
         guard !isRunning else { return }
-
-        let translationActive = AppSettings.shared.subtitleTranslationLanguage != nil
 
         transcriber.onSubtitle = { [weak self] text, isFinal in
             Task { @MainActor in
                 guard let self else { return }
-                if translationActive {
+                if self.translationActive {
                     // Accumulate words for overlap trimming, but don't show SubtitlePanel
                     if isFinal {
                         self.subtitlePanel.accumulateFinal(text)
@@ -60,16 +66,17 @@ final class SubtitleService {
                         self.subtitlePanel.showVolatile(text)
                     }
                 }
-                if !translationActive {
+                if !self.translationActive {
                     self.throttledWriteIPC(text: self.subtitlePanel.displayText)
                 }
-                if translationActive {
+                if self.translationActive {
                     self.onNewWords()
                 }
             }
         }
 
-        await transcriber.start(locale: subtitleLocale, forTranslation: translationActive)
+        let initialTranslationActive = translationActive
+        await transcriber.start(locale: subtitleLocale, forTranslation: initialTranslationActive)
 
         let preferredFormat = transcriber.preferredAudioFormat
         print("[SubtitleService] SpeechAnalyzer wants format: \(preferredFormat?.description ?? "nil")")
@@ -93,21 +100,8 @@ final class SubtitleService {
         isRunning = true
 
         // Open translation stream panel if translation is active
-        if translationActive {
-            let vm = TranslationStreamViewModel()
-            vm.isActive = true
-            vm.selectedLanguage = AppSettings.shared.subtitleTranslationLanguage ?? .russian
-            streamViewModel = vm
-
-            let panel = TranslationStreamPanel(viewModel: vm)
-            panel.onClose = { [weak self] in
-                Task { @MainActor in
-                    AppSettings.shared.subtitleTranslationLanguage = nil
-                    await self?.stop()
-                }
-            }
-            streamPanel = panel
-            panel.showCentered()
+        if initialTranslationActive {
+            openTranslationStream()
         }
 
         writeSubtitleState(text: "", status: "listening")
@@ -127,6 +121,9 @@ final class SubtitleService {
         isRefining = false
         vocabularyUpdateCounter = 0
         isFirstTranslation = true
+        videoTopic = nil
+        translationCount = 0
+        accumulatedEnglish = []
         translator = nil
         lastTranslatedInput = ""
         lastTranslationTime = 0
@@ -148,6 +145,128 @@ final class SubtitleService {
         subtitlePanel.fadeOut()
         writeSubtitleState(text: "", status: "stopped")
         print("[SubtitleService] Stopped")
+    }
+
+    // MARK: - Live Mode Switching
+
+    /// Switch translation on/off or change target language while subtitles are running.
+    /// Does NOT restart the transcriber or audio pipeline.
+    func switchTranslationMode(to language: TargetLanguage?) {
+        AppSettings.shared.subtitleTranslationLanguage = language
+
+        if let language {
+            if streamPanel != nil {
+                // Already translating — change language, reset context
+                streamViewModel?.selectedLanguage = language
+                streamViewModel?.clear()
+                lastTranslation = nil
+                lastTranslatedInput = ""
+                lastShownTranslation = ""
+                isFirstTranslation = true
+                videoTopic = nil
+                translationCount = 0
+                accumulatedEnglish = []
+                print("[SubtitleService] Switched translation language to \(language.rawValue)")
+            } else {
+                // Enable translation — open stream panel
+                openTranslationStream()
+                print("[SubtitleService] Translation enabled: \(language.rawValue)")
+            }
+        } else {
+            // Disable translation — close stream panel
+            streamViewModel?.isActive = false
+            streamPanel?.onClose = nil
+            streamPanel?.dismiss()
+            streamViewModel = nil
+            streamPanel = nil
+            subtitlePanel.clearTranslation()
+            translationTimer?.cancel()
+            translationTimer = nil
+            pendingTranslation?.cancel()
+            pendingTranslation = nil
+            refineIdleTimer?.cancel()
+            refineIdleTimer = nil
+            isRefining = false
+            translator = nil
+            lastTranslation = nil
+            lastTranslatedInput = ""
+            lastShownTranslation = ""
+            isFirstTranslation = true
+            videoTopic = nil
+            translationCount = 0
+            accumulatedEnglish = []
+            print("[SubtitleService] Translation disabled")
+        }
+    }
+
+    /// Create and show the translation stream panel. Extracted from start() for reuse.
+    private func openTranslationStream() {
+        let vm = TranslationStreamViewModel()
+        vm.isActive = true
+        vm.selectedLanguage = AppSettings.shared.subtitleTranslationLanguage ?? .russian
+        streamViewModel = vm
+
+        let panel = TranslationStreamPanel(viewModel: vm)
+        panel.onPolish = { [weak self] in
+            self?.polishTranslation()
+        }
+        panel.onClose = { [weak self] in
+            Task { @MainActor in
+                self?.switchTranslationMode(to: nil)
+                await self?.stop()
+            }
+        }
+        streamPanel = panel
+        panel.showCentered()
+    }
+
+    // MARK: - Polish
+
+    func polishTranslation() {
+        guard let vm = streamViewModel, !vm.accumulatedText.isEmpty else { return }
+        guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
+
+        if translator == nil {
+            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
+            translator = SubtitleTranslator(apiKey: apiKey)
+        }
+        guard let translator else { return }
+
+        let text = vm.accumulatedText
+        let wordCount = text.split(separator: " ").count
+        vm.isPolishing = true
+
+        Task {
+            defer { vm.isPolishing = false }
+
+            // Detect topic if not yet available
+            if videoTopic == nil {
+                let topicSource = accumulatedEnglish.isEmpty ? text : accumulatedEnglish.joined(separator: " ")
+                let sourceWordCount = topicSource.split(separator: " ").count
+                print("[Topic] Detecting from \(sourceWordCount) words...")
+                if let topic = await translator.detectTopic(from: topicSource) {
+                    videoTopic = topic
+                    print("[Topic] Detected: \"\(topic)\"")
+                } else {
+                    print("[Topic] FAILED: no result")
+                }
+            }
+
+            let topicLog = videoTopic.map { "topic: \"\($0)\"" } ?? "no topic"
+            print("[Polish] Sending \(wordCount) words to Sonnet (\(topicLog))")
+
+            if let polished = await translator.polish(
+                text: text,
+                topic: videoTopic,
+                language: targetLang
+            ) {
+                let polishedWordCount = polished.split(separator: " ").count
+                print("[Polish] Done: \(polishedWordCount) words returned")
+                vm.replaceAll(polished)
+            } else {
+                print("[Polish] FAILED: no result")
+            }
+        }
     }
 
     // MARK: - Translation
@@ -210,6 +329,7 @@ final class SubtitleService {
         let model: ClaudeModel = isFirstTranslation ? .sonnet : .haiku
         isFirstTranslation = false
         let prevTurn = self.lastTranslation
+        let currentTopic = self.videoTopic
         pendingTranslation?.cancel()
 
         // Previous subtitle stays visible until new one arrives — no flicker
@@ -220,6 +340,7 @@ final class SubtitleService {
                     language: targetLang,
                     model: model,
                     previousTurn: prevTurn,
+                    topic: currentTopic,
                     onToken: { _ in }
                 )
                 guard !Task.isCancelled else { return }
@@ -231,6 +352,19 @@ final class SubtitleService {
                         return
                     }
                     self.lastTranslation = (english: input, russian: result)
+
+                    // Topic detection: accumulate english, fire after 3rd translation
+                    self.accumulatedEnglish.append(input)
+                    self.translationCount += 1
+                    if self.translationCount == 3, self.videoTopic == nil {
+                        let combined = self.accumulatedEnglish.joined(separator: " ")
+                        Task {
+                            if let topic = await translator.detectTopic(from: combined) {
+                                self.videoTopic = topic
+                                print("[Topic] Detected: \"\(topic)\"")
+                            }
+                        }
+                    }
 
                     if let vm = self.streamViewModel {
                         // Strip Russian overlap with previous chunk

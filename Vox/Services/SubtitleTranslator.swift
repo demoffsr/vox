@@ -13,6 +13,7 @@ final class SubtitleTranslator {
         language: TargetLanguage,
         model: ClaudeModel = .haiku,
         previousTurn: (english: String, russian: String)? = nil,
+        topic: String? = nil,
         onToken: @Sendable @escaping (String) -> Void
     ) async throws -> String {
         var request = URLRequest(url: Constants.apiURL)
@@ -29,11 +30,16 @@ final class SubtitleTranslator {
         }
         messages.append(["role": "user", "content": text])
 
+        var system = Constants.subtitleTranslationPrompt(targetLanguage: language)
+        if let topic {
+            system += "\nVideo topic: \(topic)"
+        }
+
         let body: [String: Any] = [
             "model": model.rawValue,
             "max_tokens": 200,
             "stream": true,
-            "system": Constants.subtitleTranslationPrompt(targetLanguage: language),
+            "system": system,
             "messages": messages
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -90,6 +96,105 @@ final class SubtitleTranslator {
         }
 
         return result
+    }
+
+    /// Detect the general topic of the video from accumulated English text.
+    /// Single non-streaming Haiku request, returns a short topic string (3-5 words).
+    func detectTopic(from text: String) async -> String? {
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 5
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.haiku.rawValue,
+            "max_tokens": 30,
+            "stream": false,
+            "system": "/* prompt redacted */ No punctuation.",
+            "messages": [["role": "user", "content": text]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            let topic = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return topic.isEmpty ? nil : topic
+        } catch {
+            print("[Topic] FAILED: \(error)")
+            return nil
+        }
+    }
+
+    /// Polish the full translated text: fix obvious translation errors using Sonnet + topic context.
+    /// Non-streaming, user-triggered one-shot. Returns corrected text, or nil on failure.
+    func polish(text: String, topic: String?, language: TargetLanguage) async -> String? {
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 30
+
+        let langName: String
+        switch language {
+        case .auto, .russian: langName = "Russian"
+        case .english: langName = "English"
+        case .spanish: langName = "Spanish"
+        case .french: langName = "French"
+        case .german: langName = "German"
+        case .chinese: langName = "Simplified Chinese"
+        case .japanese: langName = "Japanese"
+        }
+
+        var system = """
+        /* prompt redacted */ \(langName) subtitles.
+        
+        
+        
+        """
+        if let topic {
+            system += "\nVideo topic: \(topic)"
+        }
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.sonnet.rawValue,
+            "max_tokens": 4096,
+            "stream": false,
+            "system": system,
+            "messages": [["role": "user", "content": text]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            let polished = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return polished.isEmpty ? nil : polished
+        } catch {
+            print("[Polish] FAILED: \(error)")
+            return nil
+        }
     }
 
     /// Post-process a batch of translated text: fix punctuation, capitalization, sentence breaks.
