@@ -12,7 +12,7 @@ final class SentenceBuffer {
 
     private var confirmedWords: [String] = []
     private var volatileText: String = ""
-    private var wordsSinceLastDraft: Int = 0
+    private var lastDraftWordCount: Int = 0
 
     /// All confirmed words + full volatile (for display/reference).
     var fullText: String {
@@ -42,19 +42,25 @@ final class SentenceBuffer {
 
     // MARK: - Input
 
+    /// Total words currently in buffer (confirmed + volatile).
+    private var totalWordCount: Int {
+        confirmedWords.count + volatileText.split(separator: " ").count
+    }
+
     func accumulateWords(_ text: String, isFinal: Bool) {
         if isFinal {
             let words = text.split(separator: " ").map(String.init)
             confirmedWords += words
             volatileText = ""
-            wordsSinceLastDraft += words.count
         } else {
             volatileText = text
         }
 
-        // Check sentence boundary (only on final words)
         if isFinal {
             checkBoundary()
+        } else {
+            // Draft on volatile too — so user sees translation while speaking
+            checkDraft()
         }
     }
 
@@ -70,7 +76,7 @@ final class SentenceBuffer {
     func reset() {
         confirmedWords = []
         volatileText = ""
-        wordsSinceLastDraft = 0
+        lastDraftWordCount = 0
     }
 
     // MARK: - Private
@@ -97,18 +103,25 @@ final class SentenceBuffer {
             return
         }
 
-        // 3. Draft trigger: >= 4 new words since last draft
-        if wordsSinceLastDraft >= 4 {
-            let text = safeText
-            guard !text.isEmpty else { return }
-            onEvent?(.draftReady(text: text))
-            wordsSinceLastDraft = 0
-        }
+        // 3. Also check draft on final words
+        checkDraft()
+    }
+
+    /// Trigger draft when enough new words accumulated (works for both final and volatile).
+    private func checkDraft() {
+        let total = totalWordCount
+        guard total >= 3 else { return }
+        guard total - lastDraftWordCount >= 3 else { return }
+
+        let text = safeText
+        guard !text.isEmpty else { return }
+        onEvent?(.draftReady(text: text))
+        lastDraftWordCount = total
     }
 
     private func resetBuffer() {
         confirmedWords = []
         volatileText = ""
-        wordsSinceLastDraft = 0
+        lastDraftWordCount = 0
     }
 }
