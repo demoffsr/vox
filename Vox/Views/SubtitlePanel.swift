@@ -70,7 +70,7 @@ final class SubtitlePanel: NSPanel {
         originalLabel.isSelectable = false
         originalLabel.lineBreakMode = .byTruncatingTail
         originalLabel.maximumNumberOfLines = 1
-        originalLabel.alignment = .left
+        originalLabel.alignment = .center
         originalLabel.cell?.wraps = false
         originalLabel.cell?.isScrollable = false
         originalLabel.isHidden = true
@@ -84,7 +84,7 @@ final class SubtitlePanel: NSPanel {
         label.isSelectable = false
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 2
-        label.alignment = .left
+        label.alignment = .center
         label.cell?.wraps = true
         label.cell?.isScrollable = false
 

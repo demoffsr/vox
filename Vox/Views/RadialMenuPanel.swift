@@ -46,16 +46,23 @@ final class RadialMenuPanel: NSPanel {
 
         super.init(
             contentRect: rect,
-            styleMask: [.nonactivatingPanel, .borderless],
+            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
 
+        // Hide titlebar while keeping compositing pipeline for Liquid Glass
+        titleVisibility = .hidden
+        titlebarAppearsTransparent = true
+        standardWindowButton(.closeButton)?.isHidden = true
+        standardWindowButton(.miniaturizeButton)?.isHidden = true
+        standardWindowButton(.zoomButton)?.isHidden = true
+
         isFloatingPanel = true
-        level = .screenSaver
+        level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        hasShadow = true
         isMovableByWindowBackground = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         animationBehavior = .none
@@ -117,6 +124,7 @@ struct RadialMenuView: View {
     let items: [RadialMenuItem]
     let onAction: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isShowing = false
     @State private var isDismissing = false
     @State private var hoveredItem: String?
@@ -169,24 +177,6 @@ struct RadialMenuView: View {
         }) {
             VStack(spacing: 5) {
                 ZStack {
-                    // Dark backdrop — visible on any background
-                    Circle()
-                        .fill(.black.opacity(0.55))
-                        .blur(radius: 1)
-                        .frame(width: 56, height: 56)
-
-                    Circle()
-                        .fill(isActive ? item.tint.opacity(0.25) : .white.opacity(0.08))
-                        .overlay(
-                            Circle()
-                                .strokeBorder(
-                                    isActive ? item.tint.opacity(0.7) : .white.opacity(0.2),
-                                    lineWidth: 1.5
-                                )
-                        )
-                        .shadow(color: .black.opacity(0.3), radius: 6)
-                        .shadow(color: isActive ? item.tint.opacity(0.35) : .clear, radius: 10)
-
                     Group {
                         if item.isSystemIcon {
                             Image(systemName: item.icon)
@@ -199,14 +189,30 @@ struct RadialMenuView: View {
                                 .frame(width: 24, height: 24)
                         }
                     }
-                    .foregroundStyle(isActive ? item.tint : .white.opacity(0.9))
+                    .foregroundStyle(isActive ? item.tint : .primary)
                 }
                 .frame(width: 52, height: 52)
+                .glassEffect(
+                    isActive ? .regular.tint(item.tint).interactive() : .regular.interactive(),
+                    in: .circle
+                )
+                .overlay {
+                    if colorScheme == .light {
+                        Circle().strokeBorder(.white.opacity(0.8), lineWidth: 1.5)
+                    }
+                }
 
                 Text(item.label)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .shadow(color: .black.opacity(0.6), radius: 3)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .glassEffect(.regular, in: .capsule)
+                    .overlay {
+                        if colorScheme == .light {
+                            Capsule().strokeBorder(.white.opacity(0.8), lineWidth: 1.5)
+                        }
+                    }
             }
             .scaleEffect(isHovered ? 1.1 : 1.0)
         }

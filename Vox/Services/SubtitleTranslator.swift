@@ -14,6 +14,7 @@ final class SubtitleTranslator {
         model: ClaudeModel = .haiku,
         previousTurn: (english: String, russian: String)? = nil,
         topic: String? = nil,
+        cinemaMode: Bool = false,
         onToken: @Sendable @escaping (String) -> Void
     ) async throws -> String {
         var request = URLRequest(url: Constants.apiURL)
@@ -30,9 +31,11 @@ final class SubtitleTranslator {
         }
         messages.append(["role": "user", "content": text])
 
-        var system = Constants.subtitleTranslationPrompt(targetLanguage: language)
+        var system = cinemaMode
+            ? Constants.cinemaTranslationPrompt(targetLanguage: language)
+            : Constants.subtitleTranslationPrompt(targetLanguage: language)
         if let topic {
-            system += "\nVideo topic: \(topic)"
+            system += "\nShow/movie context: \(topic)"
         }
 
         let body: [String: Any] = [
@@ -100,19 +103,22 @@ final class SubtitleTranslator {
 
     /// Detect the general topic of the video from accumulated English text.
     /// Single non-streaming Haiku request, returns a short topic string (3-5 words).
-    func detectTopic(from text: String) async -> String? {
+    func detectTopic(from text: String, cinemaMode: Bool = false) async -> String? {
         var request = URLRequest(url: Constants.apiURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
-        request.timeoutInterval = 5
+        request.timeoutInterval = cinemaMode ? 10 : 5
 
+        let model = cinemaMode ? ClaudeModel.sonnet : ClaudeModel.haiku
         let body: [String: Any] = [
-            "model": ClaudeModel.haiku.rawValue,
-            "max_tokens": 30,
+            "model": model.rawValue,
+            "max_tokens": cinemaMode ? 50 : 30,
             "stream": false,
-            "system": "/* prompt redacted */ No punctuation.",
+            "system": cinemaMode
+                ? "/* prompt redacted */ Include the name (if recognizable), genre, and setting. Answer in 5-10 words. No punctuation."
+                : "/* prompt redacted */ No punctuation.",
             "messages": [["role": "user", "content": text]]
         ]
 

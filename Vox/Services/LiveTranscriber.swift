@@ -65,6 +65,9 @@ final class LiveTranscriber: @unchecked Sendable {
     private var isSilent: Bool = false
     private var silenceFired: Bool = false  // prevent re-firing until speech resumes
 
+    /// Cinema mode: tighter bandpass + higher speech gate for noisy content (series, movies)
+    var cinemaMode: Bool = false
+
     // MARK: - Public API
 
     /// Start transcription.
@@ -317,7 +320,7 @@ final class LiveTranscriber: @unchecked Sendable {
         var rms: Float = 0
         vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
 
-        let isSpeech = rms > 0.005
+        let isSpeech = rms > (cinemaMode ? 0.01 : 0.005)
 
         if isSpeech {
             // Speech resumed — reset silence tracking
@@ -344,11 +347,12 @@ final class LiveTranscriber: @unchecked Sendable {
         }
     }
 
-    /// Butterworth 2nd-order high-pass at 80 Hz — removes sub-bass (kick drums, 808s)
-    /// that carries no speech information but interferes with recognition.
+    /// Butterworth 2nd-order high-pass — removes sub-bass that interferes with recognition.
+    /// Lecture: 80 Hz (standard). Cinema: 200 Hz (aggressive — cuts explosions, bass music).
     private func applyHighPassFilter(_ samples: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
+        let cutoff = cinemaMode ? 200.0 : 80.0
         if sampleRate != hpConfiguredRate {
-            let omega = 2.0 * .pi * 80.0 / sampleRate
+            let omega = 2.0 * .pi * cutoff / sampleRate
             let cosW = cos(omega)
             let alpha = sin(omega) / sqrt(2.0) // Q = 1/√2 (Butterworth)
             let a0 = 1.0 + alpha
@@ -371,11 +375,12 @@ final class LiveTranscriber: @unchecked Sendable {
         }
     }
 
-    /// Butterworth 2nd-order low-pass at 8 kHz — removes high-frequency noise (cymbals, hiss, artifacts)
-    /// that carries no speech information but can confuse the recognizer.
+    /// Butterworth 2nd-order low-pass — removes high-frequency noise that confuses the recognizer.
+    /// Lecture: 8 kHz (standard). Cinema: 5 kHz (aggressive — cuts cymbals, hiss, sound effects).
     private func applyLowPassFilter(_ samples: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
+        let cutoff = cinemaMode ? 5000.0 : 8000.0
         if sampleRate != lpConfiguredRate {
-            let omega = 2.0 * .pi * 8000.0 / sampleRate
+            let omega = 2.0 * .pi * cutoff / sampleRate
             let cosW = cos(omega)
             let alpha = sin(omega) / sqrt(2.0) // Q = 1/√2 (Butterworth)
             let a0 = 1.0 + alpha

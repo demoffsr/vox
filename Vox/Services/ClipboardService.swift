@@ -32,7 +32,7 @@ struct ClipboardService {
         return text
     }
 
-    private func simulateCopy() {
+    func simulateCopy() {
         let source = CGEventSource(stateID: .hidSystemState)
 
         // Key down: Cmd+C

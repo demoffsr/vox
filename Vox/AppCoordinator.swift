@@ -18,17 +18,10 @@ final class AppCoordinator {
         hotkeyService = HotkeyService()
         hotkeyService?.start()
 
-        // Cmd+T → Translate clipboard
+        // Cmd+T → if text selected: translate; otherwise: radial menu
         hotkeyService?.register(keyCode: kVK_ANSI_T, modifiers: cmdKey) { [weak self] in
             Task { @MainActor in
-                self?.translate()
-            }
-        }
-
-        // Cmd+Shift+T → Radial quick menu
-        hotkeyService?.register(keyCode: kVK_ANSI_T, modifiers: cmdKey | shiftKey) { [weak self] in
-            Task { @MainActor in
-                self?.toggleRadialMenu()
+                self?.smartHotkey()
             }
         }
 
@@ -51,6 +44,27 @@ final class AppCoordinator {
 
     func translateText(_ text: String) {
         viewModel.translateDirectly(text: text)
+    }
+
+    /// Cmd+T: selected text → translate, no selection → radial menu
+    private func smartHotkey() {
+        let oldText = NSPasteboard.general.string(forType: .string) ?? ""
+        let oldCount = NSPasteboard.general.changeCount
+        let clipboard = ClipboardService()
+        clipboard.simulateCopy()
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            let newText = NSPasteboard.general.string(forType: .string) ?? ""
+            let newCount = NSPasteboard.general.changeCount
+
+            // Text was selected only if clipboard changed AND content is different
+            if newCount != oldCount && newText != oldText && !newText.isEmpty {
+                translate()
+            } else {
+                toggleRadialMenu()
+            }
+        }
     }
 
     func toggleCinemaMode() {

@@ -23,6 +23,8 @@ final class SubtitleService {
     private var draftTask: Task<Void, Never>?
     private var finalTask: Task<Void, Never>?
     private var lastFinalTranslation: (english: String, russian: String)?
+    /// Cinema: accumulates text from cancelled translations so rapid dialogue gets batched
+    private var pendingFinalText: String = ""
     private var rateLimitUntil: TimeInterval = 0
     private var videoTopic: String?
     private var translationCount = 0
@@ -49,7 +51,10 @@ final class SubtitleService {
             guard let self else { return }
             switch event {
             case .draftReady(let text):
-                self.translateDraft(text)
+                // Cinema: skip drafts — only finals (pop-on, no flicker, fewer API calls)
+                if self.displayMode != .cinema {
+                    self.translateDraft(text)
+                }
             case .sentenceComplete(let text):
                 self.translateFinal(text)
             }
@@ -81,6 +86,7 @@ final class SubtitleService {
         }
 
         let initialTranslationActive = translationActive
+        transcriber.cinemaMode = displayMode == .cinema
         await transcriber.start(locale: subtitleLocale, forTranslation: initialTranslationActive)
 
         let preferredFormat = transcriber.preferredAudioFormat
@@ -120,6 +126,7 @@ final class SubtitleService {
         draftTask = nil
         finalTask?.cancel()
         finalTask = nil
+        pendingFinalText = ""
         videoTopic = nil
         translationCount = 0
         accumulatedEnglish = []
@@ -179,6 +186,7 @@ final class SubtitleService {
             draftTask = nil
             finalTask?.cancel()
             finalTask = nil
+            pendingFinalText = ""
             translator = nil
             lastFinalTranslation = nil
             videoTopic = nil
@@ -341,7 +349,7 @@ final class SubtitleService {
         }
     }
 
-    // MARK: - Final Translation (Sonnet, quality)
+    // MARK: - Final Translation (Sonnet for lecture, Haiku for cinema)
 
     private func translateFinal(_ text: String) {
         guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
@@ -352,6 +360,28 @@ final class SubtitleService {
 
         draftTask?.cancel()
 
+        let isCinema = displayMode == .cinema
+
+        if isCinema && finalTask != nil {
+            // Cinema: translation in-flight — queue, don't cancel
+            pendingFinalText = pendingFinalText.isEmpty ? text : pendingFinalText + " " + text
+            print("[Final] Queued: \"\(text)\"")
+            return
+        }
+
+        // Include any queued text from rapid dialogue
+        let textToTranslate: String
+        if isCinema && !pendingFinalText.isEmpty {
+            textToTranslate = pendingFinalText + " " + text
+            pendingFinalText = ""
+        } else {
+            textToTranslate = text
+        }
+
+        startFinalTranslation(textToTranslate, targetLang: targetLang, isCinema: isCinema)
+    }
+
+    private func startFinalTranslation(_ text: String, targetLang: TargetLanguage, isCinema: Bool) {
         if translator == nil {
             guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
             translator = SubtitleTranslator(apiKey: apiKey)
@@ -364,13 +394,16 @@ final class SubtitleService {
         print("[Final] EN: \"\(text)\"")
 
         finalTask = Task {
+            defer { self.finalTask = nil }
             do {
+                let finalModel: ClaudeModel = isCinema ? .haiku : .sonnet
                 let result = try await translator.translateStreaming(
                     text: text,
                     language: targetLang,
-                    model: .sonnet,
+                    model: finalModel,
                     previousTurn: prevTurn,
                     topic: currentTopic,
+                    cinemaMode: isCinema,
                     onToken: { _ in }
                 )
                 guard !Task.isCancelled else { return }
@@ -387,10 +420,11 @@ final class SubtitleService {
 
                 self.accumulatedEnglish.append(text)
                 self.translationCount += 1
-                if self.translationCount == 3, self.videoTopic == nil {
+                let detectAfter = isCinema ? 5 : 3
+                if self.translationCount == detectAfter, self.videoTopic == nil {
                     let combined = self.accumulatedEnglish.joined(separator: " ")
                     Task {
-                        if let topic = await translator.detectTopic(from: combined) {
+                        if let topic = await translator.detectTopic(from: combined, cinemaMode: isCinema) {
                             self.videoTopic = topic
                             print("[Topic] Detected: \"\(topic)\"")
                         }
@@ -398,6 +432,13 @@ final class SubtitleService {
                 }
 
                 self.throttledWriteIPC(text: result)
+
+                // Cinema: process any queued dialogue that arrived during translation
+                if isCinema && !self.pendingFinalText.isEmpty {
+                    let queued = self.pendingFinalText
+                    self.pendingFinalText = ""
+                    self.startFinalTranslation(queued, targetLang: targetLang, isCinema: true)
+                }
             } catch {
                 if case ClaudeAPIService.APIError.rateLimited = error {
                     self.rateLimitUntil = Date().timeIntervalSince1970 + 30

@@ -68,6 +68,32 @@ enum Constants {
         """
     }
 
+    static func cinemaTranslationPrompt(targetLanguage: TargetLanguage) -> String {
+        let lang: String
+        switch targetLanguage {
+        case .auto:     lang = "Russian"
+        case .english:  lang = "English"
+        case .russian:  lang = "Russian"
+        case .spanish:  lang = "Spanish"
+        case .french:   lang = "French"
+        case .german:   lang = "German"
+        case .chinese:  lang = "Simplified Chinese"
+        case .japanese: lang = "Japanese"
+        }
+
+        return """
+        /* prompt redacted */ // \(lang).
+        
+         \(lang): colloquial forms, contractions, natural phrasing.
+         \(lang) equivalents — never word-for-word.
+        
+        
+        
+        
+        
+        """
+    }
+
     /// Punctuation characters that indicate a sentence end (Latin + CJK).
     static let sentenceEndCharacters: Set<Character> = [
         ".", "!", "?",
