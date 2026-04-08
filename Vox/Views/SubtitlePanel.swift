@@ -12,11 +12,9 @@ final class SubtitlePanel: NSPanel {
     private var fadeTimer: Timer?
     private var isFadingOut = false
 
-    private var confirmedWords: [String] = []
-    private var volatileText: String = ""
+    private var rawText: String = ""
 
     /// When set, panel displays this instead of original transcriber text.
-    /// Original state (confirmedWords/volatileText) keeps accumulating in background.
     var translationOverride: String?
 
     /// Generation counter — prevents stale streaming tokens from updating the panel.
@@ -27,39 +25,9 @@ final class SubtitlePanel: NSPanel {
     private let originalFont = NSFont.systemFont(ofSize: 14, weight: .regular)
     private static let panelWidth: CGFloat = 620
 
-    /// Original (untranslated) text from transcriber — includes volatile (partial) words.
-    var originalDisplayText: String {
-        var all = confirmedWords.joined(separator: " ")
-        if !volatileText.isEmpty {
-            if !all.isEmpty { all += " " }
-            all += volatileText
-        }
-        return all
-    }
-
-    /// Text safe for translation: all confirmed words + volatile text minus
-    /// the last volatile word (which may be an incomplete fragment like "quant").
-    /// Confirmed words are always complete; only volatile tail risks fragments.
-    var textForTranslation: String {
-        var all = confirmedWords.joined(separator: " ")
-        if !volatileText.isEmpty {
-            var volatileWords = volatileText.split(separator: " ").map(String.init)
-            // Strip last volatile word — may be an incomplete fragment
-            if !volatileWords.isEmpty {
-                volatileWords.removeLast()
-            }
-            let safeVolatile = volatileWords.joined(separator: " ")
-            if !safeVolatile.isEmpty {
-                if !all.isEmpty { all += " " }
-                all += safeVolatile
-            }
-        }
-        return all
-    }
-
     /// What's currently shown on screen (translation if available, otherwise original).
     var displayText: String {
-        translationOverride ?? originalDisplayText
+        translationOverride ?? rawText
     }
 
     init() {
@@ -154,40 +122,23 @@ final class SubtitlePanel: NSPanel {
     // MARK: - Public API
 
     func showVolatile(_ text: String) {
-        volatileText = text
-        // When translation is active, don't overwrite the label with English
         if translationOverride == nil {
+            rawText = text
             updateLabel()
         }
         show()
     }
 
     func showFinal(_ text: String) {
-        confirmedWords += text.split(separator: " ").map(String.init)
-        volatileText = ""
-        // When translation is active, don't overwrite the label with English
         if translationOverride == nil {
+            rawText = rawText.isEmpty ? text : rawText + " " + text
+            let words = rawText.split(separator: " ")
+            if words.count > 60 {
+                rawText = words.suffix(30).joined(separator: " ")
+            }
             updateLabel()
         }
         show()
-        // Trim old words
-        if confirmedWords.count > 60 {
-            confirmedWords = Array(confirmedWords.suffix(30))
-        }
-    }
-
-    /// Accumulate final words without showing the panel. Used when translation stream is active.
-    func accumulateFinal(_ text: String) {
-        confirmedWords += text.split(separator: " ").map(String.init)
-        volatileText = ""
-        if confirmedWords.count > 60 {
-            confirmedWords = Array(confirmedWords.suffix(30))
-        }
-    }
-
-    /// Accumulate volatile text without showing the panel. Used when translation stream is active.
-    func accumulateVolatile(_ text: String) {
-        volatileText = text
     }
 
     /// Set translation text directly (no streaming). Updates label immediately.
@@ -239,8 +190,7 @@ final class SubtitlePanel: NSPanel {
             guard let self, self.isFadingOut else { return }
             self.isFadingOut = false
             self.orderOut(nil)
-            self.confirmedWords.removeAll()
-            self.volatileText = ""
+            self.rawText = ""
             self.translationOverride = nil
             self.label.stringValue = ""
             self.originalLabel.stringValue = ""
@@ -251,7 +201,7 @@ final class SubtitlePanel: NSPanel {
     // MARK: - Private
 
     private func updateLabel() {
-        let text = translationOverride ?? originalDisplayText
+        let text = translationOverride ?? rawText
         let allWords = text.split(separator: " ").map(String.init)
 
         let maxLines = 2
