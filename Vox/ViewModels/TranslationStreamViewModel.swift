@@ -3,74 +3,54 @@ import SwiftUI
 @Observable
 @MainActor
 final class TranslationStreamViewModel {
-    private var refinedText: String = ""
-    private var pendingChunks: [String] = []
+    private var finalText: String = ""
+    private var draftText: String = ""
     var isActive: Bool = false
     var isPolishing: Bool = false
     var selectedLanguage: TargetLanguage = .russian
 
-    /// Full display text: refined prefix + pending raw chunks.
+    /// Full display text: final prefix + draft suffix.
     var accumulatedText: String {
-        if refinedText.isEmpty {
-            return pendingChunks.joined(separator: " ")
-        } else if pendingChunks.isEmpty {
-            return refinedText
-        } else {
-            return refinedText + " " + pendingChunks.joined(separator: " ")
-        }
+        if finalText.isEmpty && draftText.isEmpty { return "" }
+        if finalText.isEmpty { return draftText }
+        if draftText.isEmpty { return finalText }
+        return finalText + " " + draftText
     }
 
-    /// Number of chunks waiting to be refined.
-    var pendingChunksCount: Int { pendingChunks.count }
-
-    /// The pending chunks joined as a single string (sent to refine API).
-    var pendingText: String {
-        pendingChunks.joined(separator: " ")
+    /// Character length of the final portion in accumulatedText.
+    /// Used by the view to split styling at the right position.
+    var finalLength: Int {
+        if finalText.isEmpty { return 0 }
+        if draftText.isEmpty { return finalText.count }
+        return finalText.count + 1 // +1 for the space separator
     }
 
-    /// Append a raw translated chunk. Returns the new pending count.
-    @discardableResult
-    func append(_ text: String) -> Int {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return pendingChunks.count }
-        pendingChunks.append(trimmed)
-        return pendingChunks.count
+    /// Update the draft translation (replaces previous draft).
+    func updateDraft(_ text: String) {
+        draftText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Replace the first `chunkCount` pending chunks with refined text.
-    /// Chunks appended after the refine request started are preserved.
-    func commitRefinedText(_ text: String, chunkCount: Int) {
+    /// Commit a final sentence translation. Appends to finalText, clears draft.
+    func commitFinal(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if refinedText.isEmpty {
-            refinedText = trimmed
+        if finalText.isEmpty {
+            finalText = trimmed
         } else {
-            refinedText += " " + trimmed
+            finalText += " " + trimmed
         }
-        let removeCount = min(chunkCount, pendingChunks.count)
-        pendingChunks.removeFirst(removeCount)
+        draftText = ""
     }
 
-    /// The last appended chunk (for Russian overlap trimming).
-    var lastChunk: String {
-        pendingChunks.last ?? refinedTail(maxWords: 8)
-    }
-
-    /// Get the last N words of refined text (for context in refine API call).
-    func refinedTail(maxWords: Int = 30) -> String {
-        guard !refinedText.isEmpty else { return "" }
-        let words = refinedText.split(separator: " ")
-        return words.suffix(maxWords).joined(separator: " ")
-    }
-
+    /// Replace all text (used by Polish button).
     func replaceAll(_ text: String) {
-        refinedText = text
-        pendingChunks.removeAll()
+        finalText = text
+        draftText = ""
     }
 
     func clear() {
-        refinedText = ""
-        pendingChunks.removeAll()
+        finalText = ""
+        draftText = ""
     }
 
     func copyAll() {
