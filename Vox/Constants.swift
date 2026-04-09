@@ -217,6 +217,18 @@ enum TargetLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    var displayName: String {
+        switch self {
+        case .auto, .russian: return "Russian"
+        case .english:  return "English"
+        case .spanish:  return "Spanish"
+        case .french:   return "French"
+        case .german:   return "German"
+        case .chinese:  return "Simplified Chinese"
+        case .japanese: return "Japanese"
+        }
+    }
+
     var localeLanguage: Locale.Language {
         switch self {
         case .auto, .english: return .init(identifier: "en")

@@ -31,6 +31,10 @@ final class SubtitleService {
     private var videoTopic: String?
     private var translationCount = 0
     private var accumulatedEnglish: [String] = []
+    // Glossary state
+    private var currentGlossary: Glossary?
+    private var glossaryTask: Task<Void, Never>?
+    private var userProvidedShowName: String?
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -132,6 +136,10 @@ final class SubtitleService {
         videoTopic = nil
         translationCount = 0
         accumulatedEnglish = []
+        currentGlossary = nil
+        glossaryTask?.cancel()
+        glossaryTask = nil
+        userProvidedShowName = nil
         translator = nil
         recentTranslations = []
         sentenceBuffer.reset()
@@ -158,6 +166,13 @@ final class SubtitleService {
         AppSettings.shared.subtitleTranslationLanguage = language
 
         if let language {
+            // Regenerate glossary for new language (works in both cinema and lecture)
+            let glossaryShowName = userProvidedShowName ?? videoTopic
+            currentGlossary = nil
+            if let glossaryShowName {
+                startGlossaryGeneration(showName: glossaryShowName, isUserProvided: userProvidedShowName != nil, language: language)
+            }
+
             if streamPanel != nil {
                 streamViewModel?.selectedLanguage = language
                 streamViewModel?.clear()
@@ -194,6 +209,10 @@ final class SubtitleService {
             videoTopic = nil
             translationCount = 0
             accumulatedEnglish = []
+            currentGlossary = nil
+            glossaryTask?.cancel()
+            glossaryTask = nil
+            userProvidedShowName = nil
             sentenceBuffer.reset()
             print("[SubtitleService] Translation disabled")
         }
@@ -219,6 +238,36 @@ final class SubtitleService {
                 openTranslationStream()
             }
             print("[SubtitleService] Switched to Lecture mode")
+        }
+    }
+
+    // MARK: - Glossary
+
+    func startGlossaryGeneration(showName: String, isUserProvided: Bool, language: TargetLanguage? = nil) {
+        if isUserProvided {
+            videoTopic = showName
+            userProvidedShowName = showName
+        }
+
+        guard let targetLang = language ?? AppSettings.shared.subtitleTranslationLanguage else { return }
+
+        if translator == nil {
+            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
+            translator = SubtitleTranslator(apiKey: apiKey)
+        }
+        guard let translator else { return }
+
+        glossaryTask?.cancel()
+        glossaryTask = Task {
+            print("[Glossary] Generating for \"\(showName)\" (user: \(isUserProvided))...")
+            if let glossary = await translator.generateGlossary(
+                showName: showName, targetLanguage: targetLang, isUserProvided: isUserProvided
+            ) {
+                self.currentGlossary = glossary
+                print("[Glossary] Ready: \(glossary.content.count) chars")
+            } else {
+                print("[Glossary] FAILED for \"\(showName)\"")
+            }
         }
     }
 
@@ -280,7 +329,7 @@ final class SubtitleService {
             let result: String?
             switch mode {
             case .polish:
-                result = await translator.polish(text: text, topic: videoTopic, language: targetLang)
+                result = await translator.polish(text: text, topic: videoTopic, glossary: currentGlossary, language: targetLang)
             case .summarize:
                 result = await translator.summarize(text: text, topic: videoTopic, language: targetLang)
             case .studyMode:
@@ -317,6 +366,7 @@ final class SubtitleService {
 
         let prevTurns = recentTranslations
         let currentTopic = videoTopic
+        let glossary = currentGlossary
 
         print("[Draft] EN: \"\(text)\"")
 
@@ -328,6 +378,7 @@ final class SubtitleService {
                     model: .haiku,
                     previousTurns: prevTurns,
                     topic: currentTopic,
+                    glossary: glossary,
                     onToken: { _ in }
                 )
                 guard !Task.isCancelled else { return }
@@ -392,6 +443,7 @@ final class SubtitleService {
 
         let prevTurns = recentTranslations
         let currentTopic = videoTopic
+        let glossary = currentGlossary
 
         print("[Final] EN: \"\(text)\" (context: \(prevTurns.count) turns)")
 
@@ -405,6 +457,7 @@ final class SubtitleService {
                     model: finalModel,
                     previousTurns: prevTurns,
                     topic: currentTopic,
+                    glossary: glossary,
                     cinemaMode: isCinema,
                     onToken: { _ in }
                 )
@@ -429,9 +482,21 @@ final class SubtitleService {
                 if self.translationCount == detectAfter, self.videoTopic == nil {
                     let combined = self.accumulatedEnglish.joined(separator: " ")
                     Task {
-                        if let topic = await translator.detectTopic(from: combined, cinemaMode: isCinema) {
-                            self.videoTopic = topic
-                            print("[Topic] Detected: \"\(topic)\"")
+                        if isCinema, let targetLang = AppSettings.shared.subtitleTranslationLanguage {
+                            // Single call: detect topic + generate glossary
+                            if let result = await translator.detectTopicWithGlossary(
+                                from: combined, targetLanguage: targetLang
+                            ) {
+                                self.videoTopic = result.topic
+                                self.currentGlossary = result.glossary
+                                print("[Topic+Glossary] \"\(result.topic)\", \(result.glossary.content.count) chars")
+                            }
+                        } else {
+                            // Lecture: topic only
+                            if let topic = await translator.detectTopic(from: combined) {
+                                self.videoTopic = topic
+                                print("[Topic] Detected: \"\(topic)\"")
+                            }
                         }
                     }
                 }

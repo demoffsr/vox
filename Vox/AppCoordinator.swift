@@ -8,6 +8,7 @@ final class AppCoordinator {
     private var panelController: PanelController?
     private var hotkeyService: HotkeyService?
     private var radialMenuPanel: RadialMenuPanel?
+    private var cinemaInputPanel: CinemaInputPanel?
 
     // Set by AppDelegate after init
     weak var subtitleService: SubtitleService?
@@ -202,8 +203,67 @@ final class AppCoordinator {
                     AppSettings.shared.subtitleTranslationLanguage != nil
                         && AppSettings.shared.subtitleDisplayMode == .cinema
                 },
-                action: { [weak self] in self?.toggleCinemaMode() }
+                action: { [weak self] in self?.handleCinemaButton() }
             ),
         ]
+    }
+
+    // MARK: - Cinema Input
+
+    private func handleCinemaButton() {
+        let isCinemaActive = AppSettings.shared.subtitleTranslationLanguage != nil
+            && AppSettings.shared.subtitleDisplayMode == .cinema
+        if isCinemaActive {
+            toggleCinemaMode()
+        } else {
+            showCinemaInput()
+        }
+    }
+
+    private func showCinemaInput() {
+        let mouseLocation = NSEvent.mouseLocation
+        // Radial menu is already dismissing (onAction was called).
+        // Show input panel at the same position after dismiss animation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+
+            let panel = CinemaInputPanel(origin: mouseLocation)
+            panel.onSubmit = { [weak self] showName in
+                self?.cinemaInputPanel = nil
+                self?.startCinemaWithContext(showName: showName)
+            }
+            panel.onSkip = { [weak self] in
+                self?.cinemaInputPanel = nil
+                self?.startCinemaWithContext(showName: nil)
+            }
+            self.cinemaInputPanel = panel
+            panel.showAnimated()
+        }
+    }
+
+    private func startCinemaWithContext(showName: String?) {
+        guard let service = subtitleService else { return }
+
+        // Resolve language FIRST so glossary generation uses the correct one
+        let lang: TargetLanguage = AppSettings.shared.subtitleTranslationLanguage ?? .russian
+
+        // Start glossary generation IMMEDIATELY (races with audio init — usually wins)
+        if let showName {
+            service.startGlossaryGeneration(showName: showName, isUserProvided: true, language: lang)
+        }
+        AppSettings.shared.subtitleDisplayMode = .cinema
+
+        if service.isRunning {
+            service.switchDisplayMode(to: .cinema)
+            if AppSettings.shared.subtitleTranslationLanguage == nil {
+                service.switchTranslationMode(to: lang)
+            }
+        } else {
+            AppSettings.shared.subtitleTranslationLanguage = lang
+            Task {
+                service.subtitleLocale = AppSettings.shared.subtitleLanguage.locale
+                await service.start()
+            }
+        }
     }
 }

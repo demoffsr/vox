@@ -14,6 +14,7 @@ final class SubtitleTranslator {
         model: ClaudeModel = .haiku,
         previousTurns: [(original: String, translated: String)] = [],
         topic: String? = nil,
+        glossary: Glossary? = nil,
         cinemaMode: Bool = false,
         temperature: Double = 0.2,
         onToken: @Sendable @escaping (String) -> Void
@@ -21,6 +22,7 @@ final class SubtitleTranslator {
         let result = try await executeTranslationRequest(
             text: text, language: language, model: model,
             previousTurns: previousTurns, topic: topic,
+            glossary: glossary,
             cinemaMode: cinemaMode, temperature: temperature,
             onToken: onToken
         )
@@ -31,6 +33,7 @@ final class SubtitleTranslator {
             let retryResult = try await executeTranslationRequest(
                 text: text, language: language, model: model,
                 previousTurns: previousTurns, topic: topic,
+                glossary: glossary,
                 cinemaMode: cinemaMode, temperature: min(temperature + 0.1, 1.0),
                 onToken: { _ in }
             )
@@ -59,9 +62,15 @@ final class SubtitleTranslator {
         }
 
         // 2. Translation equals original (not translated)
+        // Exception: short interjections/onomatopoeia are the same across languages
         if translation.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
            original.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
-            return "identical to original"
+            let words = original.split(separator: " ")
+            let isShortInterjection = words.count <= 4
+                && original.unicodeScalars.allSatisfy { CharacterSet.letters.union(.whitespaces).union(.punctuationCharacters).contains($0) }
+            if !isShortInterjection {
+                return "identical to original"
+            }
         }
 
         // 3. Leaked reasoning phrases
@@ -107,6 +116,7 @@ final class SubtitleTranslator {
         model: ClaudeModel,
         previousTurns: [(original: String, translated: String)],
         topic: String?,
+        glossary: Glossary? = nil,
         cinemaMode: Bool,
         temperature: Double,
         onToken: @Sendable @escaping (String) -> Void
@@ -130,6 +140,12 @@ final class SubtitleTranslator {
             : Constants.subtitleTranslationPrompt(targetLanguage: language)
         if let topic {
             system += "\nShow/movie context: \(topic)"
+        }
+        if let glossary {
+            system += glossary.promptFragment
+        }
+        if let asrHints = glossary?.asrPromptFragment {
+            system += asrHints
         }
 
         let body: [String: Any] = [
@@ -244,9 +260,167 @@ final class SubtitleTranslator {
         }
     }
 
+    // MARK: - Glossary Generation
+
+    /// Generate a translation glossary for a known show/movie.
+    /// Single non-streaming Sonnet request.
+    func generateGlossary(
+        showName: String,
+        targetLanguage: TargetLanguage,
+        isUserProvided: Bool
+    ) async -> Glossary? {
+        let langName = targetLanguage.displayName
+
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 15
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.sonnet.rawValue,
+            "max_tokens": 500,
+            "stream": false,
+            "temperature": 0.3,
+            "system": """
+            /* prompt redacted */
+             \(langName).
+
+            Rules:
+            - 
+            -  → \(langName) equivalent (one per line)
+            - , key idioms/expletives used in the show
+            - For proper nouns (character names, organization names, place names):  \(langName) name from the localized version of the show. If no official \(langName) localization exists, keep the original English spelling — 
+            - For slang and in-universe terms:  \(langName) equivalents that match the show's tone
+            - If you're not confident about a specific translation, mark it with [?]
+            -  with common speech recognition mishearings
+              Format: misheard → correct (e.g. "soups" → "supes")
+
+            
+            """,
+            "messages": [["role": "user", "content": "Show: \(showName)"]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            return Glossary.parse(raw: result, showName: showName, isUserProvided: isUserProvided)
+        } catch {
+            print("[Glossary] FAILED: \(error)")
+            return nil
+        }
+    }
+
+    /// Detect topic AND generate glossary in a single Sonnet call (for auto-detect in cinema mode).
+    func detectTopicWithGlossary(
+        from text: String,
+        targetLanguage: TargetLanguage
+    ) async -> (topic: String, glossary: Glossary)? {
+        let langName = targetLanguage.displayName
+
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 15
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.sonnet.rawValue,
+            "max_tokens": 600,
+            "stream": false,
+            "temperature": 0.3,
+            "system": """
+            /* prompt redacted */
+             \(langName).
+
+            
+            
+            GLOSSARY:
+            English term → \(langName) equivalent
+            ...
+            ## ASR
+            misheard → correct
+            ...
+
+            Rules:
+            - Always give your best guess for the show — never say you cannot identify
+            - List at most 15 key terms (characters, slang, in-universe terms, key idioms)
+            - For proper nouns:  \(langName) name from the localized version. If none exists, keep original English — 
+            - For slang/in-universe terms:  \(langName) equivalents
+            - 
+            - Output ONLY this format. No explanations.
+            """,
+            "messages": [["role": "user", "content": text]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let result = firstBlock["text"] as? String else {
+                return nil
+            }
+
+            // Parse SHOW: and GLOSSARY: sections
+            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard let showRange = trimmed.range(of: "SHOW:"),
+                  let glossaryRange = trimmed.range(of: "GLOSSARY:") else {
+                // Fallback: treat entire response as topic (like old detectTopic)
+                let topic = trimmed.components(separatedBy: "\n").first?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? trimmed
+                if topic.isEmpty { return nil }
+                // No glossary parsed, but still return topic
+                print("[Topic+Glossary] Parse failed, topic-only fallback: \"\(topic)\"")
+                return nil
+            }
+
+            let showText = trimmed[showRange.upperBound..<glossaryRange.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let glossaryText = String(trimmed[glossaryRange.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !showText.isEmpty else { return nil }
+
+            // Reject refusals
+            let lower = showText.lowercased()
+            if lower.contains("cannot") || lower.contains("can't") || lower.contains("unable to") {
+                return nil
+            }
+
+            guard let glossary = Glossary.parse(
+                raw: glossaryText, showName: showText, isUserProvided: false
+            ) else {
+                return nil
+            }
+
+            return (topic: showText, glossary: glossary)
+        } catch {
+            print("[Topic+Glossary] FAILED: \(error)")
+            return nil
+        }
+    }
+
     /// Polish the full translated text: fix obvious translation errors using Sonnet + topic context.
     /// Non-streaming, user-triggered one-shot. Returns corrected text, or nil on failure.
-    func polish(text: String, topic: String?, language: TargetLanguage) async -> String? {
+    func polish(text: String, topic: String?, glossary: Glossary? = nil, language: TargetLanguage) async -> String? {
         var request = URLRequest(url: Constants.apiURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -273,6 +447,9 @@ final class SubtitleTranslator {
         """
         if let topic {
             system += "\nVideo topic: \(topic)"
+        }
+        if let glossary {
+            system += glossary.promptFragment
         }
 
         let body: [String: Any] = [
