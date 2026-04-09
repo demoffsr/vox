@@ -76,19 +76,29 @@ final class RadialMenuPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func showAnimated() {
+        appearance = NSApp.effectiveAppearance
+
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let hostingView = NSHostingView(rootView: RadialMenuView(
             items: items,
             onAction: { [weak self] in
                 self?.dismissAnimated()
             }
-        ))
+        ).preferredColorScheme(isDark ? .dark : .light))
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = CGColor.clear
 
         contentView = hostingView
 
-        alphaValue = 1
+        // Start invisible — glass compositing needs time to resolve correct appearance
+        alphaValue = 0
         orderFrontRegardless()
+
+        // Wait for glass to composite, then show + trigger animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.alphaValue = 1
+            NotificationCenter.default.post(name: .radialMenuReady, object: nil)
+        }
 
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.dismissAnimated()
@@ -116,6 +126,7 @@ final class RadialMenuPanel: NSPanel {
 
 extension Notification.Name {
     static let radialMenuDismiss = Notification.Name("radialMenuDismiss")
+    static let radialMenuReady = Notification.Name("radialMenuReady")
 }
 
 // MARK: - SwiftUI Radial Menu View
@@ -154,7 +165,7 @@ struct RadialMenuView: View {
         .onTapGesture {
             onAction()
         }
-        .onAppear {
+        .onReceive(NotificationCenter.default.publisher(for: .radialMenuReady)) { _ in
             withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                 isShowing = true
             }
@@ -222,8 +233,8 @@ struct RadialMenuView: View {
                 hoveredItem = hovered ? item.id : nil
             }
         }
-        .offset(isShowing && !isDismissing ? itemOffset : .zero)
-        .scaleEffect(isShowing && !isDismissing ? 1 : 0)
+        .offset(itemOffset)
+        .scaleEffect(isShowing && !isDismissing ? 1 : 0.01)
         .opacity(isShowing && !isDismissing ? 1 : 0)
         .animation(
             .spring(response: 0.4, dampingFraction: 0.7)
