@@ -22,7 +22,9 @@ final class SubtitleService {
     private var translator: SubtitleTranslator?
     private var draftTask: Task<Void, Never>?
     private var finalTask: Task<Void, Never>?
-    private var lastFinalTranslation: (english: String, russian: String)?
+    /// Rolling context: last N translation pairs for multi-turn consistency
+    private var recentTranslations: [(original: String, translated: String)] = []
+    private let maxTranslationContext = 5
     /// Cinema: accumulates text from cancelled translations so rapid dialogue gets batched
     private var pendingFinalText: String = ""
     private var rateLimitUntil: TimeInterval = 0
@@ -131,7 +133,7 @@ final class SubtitleService {
         translationCount = 0
         accumulatedEnglish = []
         translator = nil
-        lastFinalTranslation = nil
+        recentTranslations = []
         sentenceBuffer.reset()
 
         streamViewModel?.isActive = false
@@ -159,7 +161,7 @@ final class SubtitleService {
             if streamPanel != nil {
                 streamViewModel?.selectedLanguage = language
                 streamViewModel?.clear()
-                lastFinalTranslation = nil
+                recentTranslations = []
                 videoTopic = nil
                 translationCount = 0
                 accumulatedEnglish = []
@@ -188,7 +190,7 @@ final class SubtitleService {
             finalTask = nil
             pendingFinalText = ""
             translator = nil
-            lastFinalTranslation = nil
+            recentTranslations = []
             videoTopic = nil
             translationCount = 0
             accumulatedEnglish = []
@@ -313,7 +315,7 @@ final class SubtitleService {
         }
         guard let translator else { return }
 
-        let prevTurn = lastFinalTranslation
+        let prevTurns = recentTranslations
         let currentTopic = videoTopic
 
         print("[Draft] EN: \"\(text)\"")
@@ -324,7 +326,7 @@ final class SubtitleService {
                     text: text,
                     language: targetLang,
                     model: .haiku,
-                    previousTurn: prevTurn,
+                    previousTurns: prevTurns,
                     topic: currentTopic,
                     onToken: { _ in }
                 )
@@ -388,10 +390,10 @@ final class SubtitleService {
         }
         guard let translator else { return }
 
-        let prevTurn = lastFinalTranslation
+        let prevTurns = recentTranslations
         let currentTopic = videoTopic
 
-        print("[Final] EN: \"\(text)\"")
+        print("[Final] EN: \"\(text)\" (context: \(prevTurns.count) turns)")
 
         finalTask = Task {
             defer { self.finalTask = nil }
@@ -401,7 +403,7 @@ final class SubtitleService {
                     text: text,
                     language: targetLang,
                     model: finalModel,
-                    previousTurn: prevTurn,
+                    previousTurns: prevTurns,
                     topic: currentTopic,
                     cinemaMode: isCinema,
                     onToken: { _ in }
@@ -410,7 +412,10 @@ final class SubtitleService {
                 guard !result.isEmpty else { return }
                 print("[Final] \(targetLang.rawValue): \"\(result)\"")
 
-                self.lastFinalTranslation = (english: text, russian: result)
+                self.recentTranslations.append((original: text, translated: result))
+                if self.recentTranslations.count > self.maxTranslationContext {
+                    self.recentTranslations.removeFirst()
+                }
                 switch self.displayMode {
                 case .lecture:
                     self.streamViewModel?.commitFinal(result)

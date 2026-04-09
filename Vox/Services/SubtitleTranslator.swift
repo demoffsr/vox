@@ -12,7 +12,7 @@ final class SubtitleTranslator {
         text: String,
         language: TargetLanguage,
         model: ClaudeModel = .haiku,
-        previousTurn: (english: String, russian: String)? = nil,
+        previousTurns: [(original: String, translated: String)] = [],
         topic: String? = nil,
         cinemaMode: Bool = false,
         temperature: Double = 0.2,
@@ -20,7 +20,7 @@ final class SubtitleTranslator {
     ) async throws -> String {
         let result = try await executeTranslationRequest(
             text: text, language: language, model: model,
-            previousTurn: previousTurn, topic: topic,
+            previousTurns: previousTurns, topic: topic,
             cinemaMode: cinemaMode, temperature: temperature,
             onToken: onToken
         )
@@ -30,7 +30,7 @@ final class SubtitleTranslator {
 
             let retryResult = try await executeTranslationRequest(
                 text: text, language: language, model: model,
-                previousTurn: previousTurn, topic: topic,
+                previousTurns: previousTurns, topic: topic,
                 cinemaMode: cinemaMode, temperature: min(temperature + 0.1, 1.0),
                 onToken: { _ in }
             )
@@ -105,7 +105,7 @@ final class SubtitleTranslator {
         text: String,
         language: TargetLanguage,
         model: ClaudeModel,
-        previousTurn: (english: String, russian: String)?,
+        previousTurns: [(original: String, translated: String)],
         topic: String?,
         cinemaMode: Bool,
         temperature: Double,
@@ -119,9 +119,9 @@ final class SubtitleTranslator {
         request.timeoutInterval = 15
 
         var messages: [[String: String]] = []
-        if let prev = previousTurn {
-            messages.append(["role": "user", "content": prev.english])
-            messages.append(["role": "assistant", "content": prev.russian])
+        for turn in previousTurns {
+            messages.append(["role": "user", "content": turn.original])
+            messages.append(["role": "assistant", "content": turn.translated])
         }
         messages.append(["role": "user", "content": text])
 
