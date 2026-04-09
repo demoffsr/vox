@@ -15,6 +15,100 @@ final class SubtitleTranslator {
         previousTurn: (english: String, russian: String)? = nil,
         topic: String? = nil,
         cinemaMode: Bool = false,
+        temperature: Double = 0.2,
+        onToken: @Sendable @escaping (String) -> Void
+    ) async throws -> String {
+        let result = try await executeTranslationRequest(
+            text: text, language: language, model: model,
+            previousTurn: previousTurn, topic: topic,
+            cinemaMode: cinemaMode, temperature: temperature,
+            onToken: onToken
+        )
+
+        if let rejection = validateTranslation(result, original: text, language: language) {
+            print("[QualityFilter] REJECTED: \(rejection) — retrying with temp +0.1")
+
+            let retryResult = try await executeTranslationRequest(
+                text: text, language: language, model: model,
+                previousTurn: previousTurn, topic: topic,
+                cinemaMode: cinemaMode, temperature: min(temperature + 0.1, 1.0),
+                onToken: { _ in }
+            )
+
+            if let retryRejection = validateTranslation(retryResult, original: text, language: language) {
+                print("[QualityFilter] RETRY ALSO REJECTED: \(retryRejection) — returning empty")
+                return ""
+            }
+
+            print("[QualityFilter] Retry passed")
+            return retryResult
+        }
+
+        return result
+    }
+
+    // MARK: - Quality Filter
+
+    /// Checks if a translation result passes quality heuristics.
+    /// Returns a rejection reason string if rejected, or nil if acceptable.
+    private func validateTranslation(_ translation: String, original: String, language: TargetLanguage) -> String? {
+        // 1. Empty or whitespace/punctuation only
+        let stripped = translation.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        if stripped.isEmpty {
+            return "empty/punctuation-only"
+        }
+
+        // 2. Translation equals original (not translated)
+        if translation.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ==
+           original.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
+            return "identical to original"
+        }
+
+        // 3. Leaked reasoning phrases
+        let lower = translation.lowercased()
+        let leakedPhrases = [
+            "i'll translate", "i will translate",
+            "here's the translation", "here is the translation",
+            "the translation is", "translation:",
+            "i'll provide", "let me translate"
+        ]
+        for phrase in leakedPhrases {
+            if lower.contains(phrase) {
+                return "leaked reasoning: \(phrase)"
+            }
+        }
+
+        // 4. Length > 3x original (hallucination)
+        if translation.count > original.count * 3 {
+            return "hallucination (length \(translation.count) > 3x original \(original.count))"
+        }
+
+        // 5. >60% same words as original (not translated) — only for non-English targets
+        if language != .english {
+            let originalWords = Set(original.lowercased().split(separator: " ").map(String.init))
+            let translationWords = translation.lowercased().split(separator: " ").map(String.init)
+            if !translationWords.isEmpty {
+                let matchCount = translationWords.filter { originalWords.contains($0) }.count
+                let matchRatio = Double(matchCount) / Double(translationWords.count)
+                if matchRatio > 0.6 {
+                    return "untranslated (\(Int(matchRatio * 100))% same words)"
+                }
+            }
+        }
+
+        return nil
+    }
+
+    // MARK: - Translation Request
+
+    private func executeTranslationRequest(
+        text: String,
+        language: TargetLanguage,
+        model: ClaudeModel,
+        previousTurn: (english: String, russian: String)?,
+        topic: String?,
+        cinemaMode: Bool,
+        temperature: Double,
         onToken: @Sendable @escaping (String) -> Void
     ) async throws -> String {
         var request = URLRequest(url: Constants.apiURL)
@@ -42,6 +136,7 @@ final class SubtitleTranslator {
             "model": model.rawValue,
             "max_tokens": 200,
             "stream": true,
+            "temperature": temperature,
             "system": system,
             "messages": messages
         ]
@@ -88,7 +183,6 @@ final class SubtitleTranslator {
             let lines = result.components(separatedBy: "\n")
             let filtered = lines.filter { line in
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                // Drop empty lines and lines that look like English reasoning
                 if trimmed.isEmpty { return false }
                 let looksEnglish = trimmed.hasPrefix("Wait") || trimmed.hasPrefix("Note:") ||
                     trimmed.hasPrefix("I need") || trimmed.hasPrefix("The correct") ||
@@ -116,8 +210,9 @@ final class SubtitleTranslator {
             "model": model.rawValue,
             "max_tokens": cinemaMode ? 50 : 30,
             "stream": false,
+            "temperature": 0.3,
             "system": cinemaMode
-                ? "/* prompt redacted */ Include the name (if recognizable), genre, and setting. Answer in 5-10 words. No punctuation."
+                ? "/* prompt redacted */   Answer in 5-10 words. No punctuation."
                 : "/* prompt redacted */ No punctuation.",
             "messages": [["role": "user", "content": text]]
         ]
@@ -136,7 +231,13 @@ final class SubtitleTranslator {
             }
 
             let topic = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            return topic.isEmpty ? nil : topic
+            if topic.isEmpty { return nil }
+            // Reject refusals — model should always guess, but filter just in case
+            let lower = topic.lowercased()
+            if lower.contains("cannot") || lower.contains("can't") || lower.contains("not enough") || lower.contains("unable to") {
+                return nil
+            }
+            return topic
         } catch {
             print("[Topic] FAILED: \(error)")
             return nil
@@ -178,6 +279,7 @@ final class SubtitleTranslator {
             "model": ClaudeModel.sonnet.rawValue,
             "max_tokens": 4096,
             "stream": false,
+            "temperature": 0.7,
             "system": system,
             "messages": [["role": "user", "content": text]]
         ]
@@ -240,6 +342,7 @@ final class SubtitleTranslator {
             "model": ClaudeModel.sonnet.rawValue,
             "max_tokens": 4096,
             "stream": false,
+            "temperature": 0.7,
             "system": system,
             "messages": [["role": "user", "content": text]]
         ]
@@ -305,6 +408,7 @@ final class SubtitleTranslator {
             "model": ClaudeModel.sonnet.rawValue,
             "max_tokens": 4096,
             "stream": false,
+            "temperature": 0.7,
             "system": system,
             "messages": [["role": "user", "content": text]]
         ]
@@ -374,6 +478,7 @@ final class SubtitleTranslator {
             "model": ClaudeModel.haiku.rawValue,
             "max_tokens": 400,
             "stream": false,
+            "temperature": 0.2,
             "system": system,
             "messages": [["role": "user", "content": userContent]]
         ]
