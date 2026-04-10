@@ -19,6 +19,19 @@ final class LiveTranscriber: @unchecked Sendable {
     private var resultsTask: Task<Void, Never>?
     private var _targetFormat: AVAudioFormat?
     private var _isRunning = false
+    /// Long-lived context mutated and re-applied via setContext() on vocabulary updates.
+    private var analysisContext: AnalysisContext?
+    /// Locale currently reserved via AssetInventory.reserve(locale:). macOS 26+
+    /// requires this before using a speech module — unreserved locales trigger
+    /// "Cannot use modules with unallocated locales" warnings.
+    private var reservedLocale: Locale?
+    /// Set to true once the transcriber delivers its first real result, meaning
+    /// the EAR worker has compiled its JIT profile and is ready to accept
+    /// contextualStrings updates. Before this, setContext calls hit "Invalid JIT
+    /// profile" and get silently rejected.
+    private var isWorkerReady = false
+    /// Vocabulary buffered while the worker wasn't ready yet — flushed on first result.
+    private var pendingVocabulary: [String]?
 
     // Cached converter — created once, reused for every buffer
     private var cachedConverter: AVAudioConverter?
@@ -77,6 +90,22 @@ final class LiveTranscriber: @unchecked Sendable {
     func start(locale: Locale = Locale(identifier: "en-US"), forTranslation: Bool = false) async {
         guard !isRunning else { return }
 
+        // macOS 26+ requires locales to be reserved via AssetInventory before a
+        // speech module is used on them. Without this, Apple logs "Cannot use
+        // modules with unallocated locales" and the EAR worker may reject
+        // contextualStrings with "Invalid JIT profile".
+        do {
+            let reserved = try await AssetInventory.reserve(locale: locale)
+            if reserved {
+                self.reservedLocale = locale
+                print("[LiveTranscriber] Reserved locale: \(locale.identifier)")
+            } else {
+                print("[LiveTranscriber] AssetInventory.reserve returned false for \(locale.identifier) — proceeding anyway")
+            }
+        } catch {
+            print("[LiveTranscriber] AssetInventory.reserve failed for \(locale.identifier): \(error)")
+        }
+
         var module: any SpeechModule
         var useSpeechTranscriber = forTranslation
 
@@ -92,9 +121,13 @@ final class LiveTranscriber: @unchecked Sendable {
             self.speechTranscriber = transcriber
             lock.unlock()
         } else {
+            // Cinema mode: enable .farField — signals that audio is distant-speaker (movie
+            // soundtrack played through laptop speakers, not a close mic). Apple's internal
+            // processing adapts accordingly.
+            let hints: Set<DictationTranscriber.ContentHint> = cinemaMode ? [.farField] : []
             let transcriber = DictationTranscriber(
                 locale: locale,
-                contentHints: [],
+                contentHints: hints,
                 transcriptionOptions: [.punctuation],
                 reportingOptions: [.volatileResults],
                 attributeOptions: []
@@ -117,9 +150,10 @@ final class LiveTranscriber: @unchecked Sendable {
             self.speechTranscriber = nil
             lock.unlock()
 
+            let hints: Set<DictationTranscriber.ContentHint> = cinemaMode ? [.farField] : []
             let transcriber = DictationTranscriber(
                 locale: locale,
-                contentHints: [],
+                contentHints: hints,
                 transcriptionOptions: [.punctuation],
                 reportingOptions: [.volatileResults],
                 attributeOptions: []
@@ -138,21 +172,39 @@ final class LiveTranscriber: @unchecked Sendable {
             return
         }
 
-        let speechAnalyzer = SpeechAnalyzer(modules: [module])
-
         // Create input stream
         let (inputStream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
 
+        // Long-lived AnalysisContext — kept around so runtime updateVocabulary
+        // calls mutate the same instance and just re-apply it via setContext.
+        let context = AnalysisContext()
+
+        let speechAnalyzer = SpeechAnalyzer(modules: [module])
+
+        // Warm up — loads models, allocates resources. Does NOT build the JIT
+        // profile for inference; that happens lazily when real audio flows.
+        do {
+            try await speechAnalyzer.prepareToAnalyze(in: bestFormat)
+        } catch {
+            print("[LiveTranscriber] prepareToAnalyze failed: \(error)")
+        }
+
         lock.lock()
         self.analyzer = speechAnalyzer
+        self.analysisContext = context
         self.inputContinuation = continuation
         self._targetFormat = bestFormat
         self._isRunning = true
+        self.isWorkerReady = false
+        self.pendingVocabulary = nil
         self.cachedConverter = nil
         self.cachedSourceFormat = nil
         lock.unlock()
 
-        // Start analysis
+        // Start analysis. We intentionally don't push setContext here — the JIT
+        // profile inside the EAR worker is only built once audio actually flows,
+        // and setContext calls before that get rejected as "Invalid JIT profile".
+        // The result consumer below flushes any pending vocabulary on first result.
         Task.detached {
             do {
                 try await speechAnalyzer.start(inputSequence: inputStream)
@@ -171,6 +223,7 @@ final class LiveTranscriber: @unchecked Sendable {
                         guard let self, self.isRunning else { break }
                         let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                         if !text.isEmpty {
+                            self.markWorkerReadyAndFlushPending()
                             let isFinal = result.isFinal
                             await MainActor.run { callback?(text, isFinal) }
                         }
@@ -187,6 +240,7 @@ final class LiveTranscriber: @unchecked Sendable {
                         guard let self, self.isRunning else { break }
                         let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                         if !text.isEmpty {
+                            self.markWorkerReadyAndFlushPending()
                             let isFinal = result.isFinal
                             await MainActor.run { callback?(text, isFinal) }
                         }
@@ -257,19 +311,63 @@ final class LiveTranscriber: @unchecked Sendable {
     }
 
     /// Feed vocabulary hints back to the recognizer to bias it toward known words.
-    /// Best-effort — errors are silently ignored.
+    /// If the EAR worker hasn't built its JIT profile yet (no audio processed),
+    /// buffers the words and flushes them on the first transcriber result.
     func updateVocabulary(_ words: [String]) {
         lock.lock()
         let currentAnalyzer = analyzer
+        let context = analysisContext
+        let workerReady = isWorkerReady
+        if !workerReady {
+            self.pendingVocabulary = words
+        }
         lock.unlock()
 
-        guard let currentAnalyzer else { return }
+        guard let currentAnalyzer, let context else { return }
+
+        if !workerReady {
+            print("[Vocabulary] Deferred \(words.count) words until worker is ready")
+            return
+        }
+
+        context.contextualStrings[.general] = words
 
         Task {
-            let context = AnalysisContext()
-            context.contextualStrings[.general] = words
-            try? await currentAnalyzer.setContext(context)
-            print("[Vocabulary] Updated with \(words.count) words")
+            do {
+                try await currentAnalyzer.setContext(context)
+                print("[Vocabulary] Updated with \(words.count) words: \(words)")
+            } catch {
+                print("[Vocabulary] setContext FAILED: \(error)")
+            }
+        }
+    }
+
+    /// Called from the result consumer on the first non-empty transcription.
+    /// Marks the EAR worker as ready (JIT profile now exists) and applies any
+    /// vocabulary that was buffered while the worker was still warming up.
+    private func markWorkerReadyAndFlushPending() {
+        lock.lock()
+        let wasReady = isWorkerReady
+        isWorkerReady = true
+        let pending = pendingVocabulary
+        pendingVocabulary = nil
+        let currentAnalyzer = analyzer
+        let context = analysisContext
+        lock.unlock()
+
+        if wasReady { return }
+
+        guard let pending, let currentAnalyzer, let context else { return }
+
+        context.contextualStrings[.general] = pending
+
+        Task {
+            do {
+                try await currentAnalyzer.setContext(context)
+                print("[Vocabulary] Flushed \(pending.count) pending words on first result: \(pending)")
+            } catch {
+                print("[Vocabulary] Pending setContext FAILED: \(error)")
+            }
         }
     }
 
@@ -283,6 +381,9 @@ final class LiveTranscriber: @unchecked Sendable {
         let task = resultsTask
         resultsTask = nil
         analyzer = nil
+        analysisContext = nil
+        isWorkerReady = false
+        pendingVocabulary = nil
         dictationTranscriber = nil
         speechTranscriber = nil
         _targetFormat = nil
@@ -296,9 +397,21 @@ final class LiveTranscriber: @unchecked Sendable {
         silenceStartTime = 0
         isSilent = false
         silenceFired = false
+        let localeToRelease = reservedLocale
+        reservedLocale = nil
         lock.unlock()
 
         task?.cancel()
+
+        // Release the reserved locale so we don't blow past maximumReservedLocales
+        // on subsequent starts. Fire-and-forget — stop() is @MainActor sync.
+        if let localeToRelease {
+            Task.detached {
+                let released = await AssetInventory.release(reservedLocale: localeToRelease)
+                print("[LiveTranscriber] Released locale: \(localeToRelease.identifier) (released=\(released))")
+            }
+        }
+
         print("[LiveTranscriber] Stopped")
     }
 
@@ -312,6 +425,7 @@ final class LiveTranscriber: @unchecked Sendable {
         guard count > 0 else { return }
 
         let samples = channelData[0]
+
         applyHighPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
         applyLowPassFilter(samples, count: count, sampleRate: buffer.format.sampleRate)
         applyPreEmphasis(samples, count: count)

@@ -163,14 +163,20 @@ final class SubtitleService {
     // MARK: - Live Mode Switching
 
     func switchTranslationMode(to language: TargetLanguage?) {
+        let previousLanguage = AppSettings.shared.subtitleTranslationLanguage
         AppSettings.shared.subtitleTranslationLanguage = language
 
         if let language {
-            // Regenerate glossary for new language (works in both cinema and lecture)
+            // Regenerate glossary ONLY if the language actually changed — otherwise
+            // a redundant "same language" tap from the menu would cancel an in-flight
+            // glossary retry and restart from scratch.
+            let languageChanged = previousLanguage != language
             let glossaryShowName = userProvidedShowName ?? videoTopic
-            currentGlossary = nil
-            if let glossaryShowName {
-                startGlossaryGeneration(showName: glossaryShowName, isUserProvided: userProvidedShowName != nil, language: language)
+            if languageChanged {
+                currentGlossary = nil
+                if let glossaryShowName {
+                    startGlossaryGeneration(showName: glossaryShowName, isUserProvided: userProvidedShowName != nil, language: language)
+                }
             }
 
             if streamPanel != nil {
@@ -264,7 +270,15 @@ final class SubtitleService {
                 showName: showName, targetLanguage: targetLang, isUserProvided: isUserProvided
             ) {
                 self.currentGlossary = glossary
-                print("[Glossary] Ready: \(glossary.content.count) chars")
+                let termLines = glossary.content.components(separatedBy: "\n")
+                    .filter { $0.contains("→") || $0.contains("—") }
+                    .count
+                print("[Glossary] Ready: \(glossary.content.count) chars, \(termLines) term lines")
+                print("[Glossary] Content preview:\n\(glossary.content.prefix(600))")
+                if let hints = glossary.asrHints {
+                    print("[Glossary] ASR hints: \(hints.prefix(400))")
+                }
+                self.pushVocabularyToTranscriber()
             } else {
                 print("[Glossary] FAILED for \"\(showName)\"")
             }
@@ -395,7 +409,7 @@ final class SubtitleService {
                 if case ClaudeAPIService.APIError.rateLimited = error {
                     self.rateLimitUntil = Date().timeIntervalSince1970 + 30
                     print("[Draft] RATE LIMITED — 30s")
-                } else if !(error is CancellationError) {
+                } else if !(error is CancellationError) && (error as? URLError)?.code != .cancelled {
                     print("[Draft] FAILED: \(error)")
                 }
             }
@@ -490,6 +504,7 @@ final class SubtitleService {
                                 self.videoTopic = result.topic
                                 self.currentGlossary = result.glossary
                                 print("[Topic+Glossary] \"\(result.topic)\", \(result.glossary.content.count) chars")
+                                self.pushVocabularyToTranscriber()
                             }
                         } else {
                             // Lecture: topic only
@@ -513,11 +528,74 @@ final class SubtitleService {
                 if case ClaudeAPIService.APIError.rateLimited = error {
                     self.rateLimitUntil = Date().timeIntervalSince1970 + 30
                     print("[Final] RATE LIMITED — 30s")
-                } else if !(error is CancellationError) {
+                } else if !(error is CancellationError) && (error as? URLError)?.code != .cancelled {
                     print("[Final] FAILED: \(error)")
                 }
             }
         }
+    }
+
+    // MARK: - ASR Vocabulary
+
+    /// Collects terms from the current glossary + videoTopic and pushes them into
+    /// SpeechAnalyzer.contextualStrings to bias recognition. Safe to call at any time —
+    /// if the analyzer isn't running, LiveTranscriber.updateVocabulary returns silently.
+    private func pushVocabularyToTranscriber() {
+        var words: [String] = []
+
+        // (1) Show name from videoTopic — format "<name>, <genre>, <setting>"
+        if let topic = videoTopic {
+            let name = topic.components(separatedBy: ",").first?
+                .trimmingCharacters(in: .whitespaces) ?? topic
+            if !name.isEmpty { words.append(name) }
+        }
+
+        if let glossary = currentGlossary {
+            // (2) Left side of each content line — the English term.
+            //     Format: "English term → Russian equivalent" (optionally " [?]").
+            //     Parse both potential separators: "→" and em-dash "—".
+            for line in glossary.content.components(separatedBy: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { continue }
+                guard let sepIdx = trimmed.firstIndex(where: { $0 == "→" || $0 == "—" }) else { continue }
+                let left = trimmed[..<sepIdx]
+                    .replacingOccurrences(of: "[?]", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                if !left.isEmpty { words.append(String(left)) }
+            }
+
+            // (3) Right side of asrHints — the correct spelling.
+            //     Format: `"misheard" → "correct", "x" → "y"`
+            if let hints = glossary.asrHints {
+                for pair in hints.components(separatedBy: ",") {
+                    let sides = pair.components(separatedBy: "→")
+                    guard sides.count == 2 else { continue }
+                    let right = sides[1]
+                        .trimmingCharacters(in: .whitespaces)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{201C}\u{201D}\u{00AB}\u{00BB}'"))
+                        .trimmingCharacters(in: .whitespaces)
+                    if !right.isEmpty { words.append(right) }
+                }
+            }
+        }
+
+        // Dedup preserving order, cap at 100 (empirical ceiling from Apple contextualStrings research).
+        var seen = Set<String>()
+        let unique = words.filter { seen.insert($0.lowercased()).inserted }
+        let capped = Array(unique.prefix(100))
+
+        guard !capped.isEmpty else { return }
+
+        // ASR biasing DISABLED — see docs/apple-speech-tuning-research.md §8.
+        // Summary: contextualStrings on SpeechTranscriber (macOS 26.1) is silently
+        // rejected by EAR worker ("Invalid JIT profile"), and when it does partially
+        // apply it shifts ASR toward wrong phonetic neighbors — net negative vs
+        // baseline recognition. Translator-side glossary (via Claude prompt) is the
+        // only channel that reliably improves quality.
+        // Re-enable by uncommenting the line below if Apple fixes runtime setContext
+        // for SpeechTranscriber in a future macOS update.
+        // transcriber.updateVocabulary(capped)
+        print("[Vocabulary] Biasing disabled (Phase 1 retrospective). Would have pushed \(capped.count) words.")
     }
 
     // MARK: - IPC

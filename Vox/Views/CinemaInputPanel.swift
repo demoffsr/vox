@@ -6,7 +6,6 @@ import SwiftUI
 @MainActor
 final class CinemaInputPanel: NSPanel {
     private let origin: NSPoint
-    private var monitor: Any?
     var onSubmit: ((String) -> Void)?
     var onSkip: (() -> Void)?
 
@@ -77,18 +76,13 @@ final class CinemaInputPanel: NSPanel {
             self.makeKey()
         }
 
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.dismissAnimated()
-            self?.onSkip?()
-        }
+        // NOTE: no global click monitor here — it used to auto-dismiss on any click
+        // anywhere, which silently ate the show name if the user clicked the video
+        // player before hitting Enter. Dismissal happens via Enter (onSubmit),
+        // Skip button, or Esc (cancelOperation).
     }
 
     func dismissAnimated() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
-
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             self.animator().alphaValue = 0

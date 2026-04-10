@@ -30,6 +30,7 @@ final class ClaudeAPIService {
             "model": model.rawValue,
             "max_tokens": 4096,
             "stream": true,
+            "temperature": 0.2,
             "system": Constants.systemPrompt(targetLanguage: targetLanguage),
             "messages": [
                 ["role": "user", "content": text]

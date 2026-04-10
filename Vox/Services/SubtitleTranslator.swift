@@ -271,55 +271,124 @@ final class SubtitleTranslator {
     ) async -> Glossary? {
         let langName = targetLanguage.displayName
 
-        var request = URLRequest(url: Constants.apiURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
-        request.timeoutInterval = 15
+        let systemPrompt = """
+        /* prompt redacted */
+         \(langName).
 
-        let body: [String: Any] = [
-            "model": ClaudeModel.sonnet.rawValue,
-            "max_tokens": 500,
-            "stream": false,
-            "temperature": 0.3,
-            "system": """
-            /* prompt redacted */
-             \(langName).
+        Rules:
+        - 
+        -  → \(langName) equivalent (one per line)
+        - , key idioms/expletives used in the show
+        - For proper nouns (character names, organization names, place names):  \(langName) name from the localized version of the show. If no official \(langName) localization exists, keep the original English spelling — 
+        - For slang and in-universe terms:  \(langName) equivalents that match the show's tone
+        - If you're not confident about a specific translation, mark it with [?]
+        -  with common speech recognition mishearings
+          Format: misheard → correct (e.g. "soups" → "supes")
 
-            Rules:
-            - 
-            -  → \(langName) equivalent (one per line)
-            - , key idioms/expletives used in the show
-            - For proper nouns (character names, organization names, place names):  \(langName) name from the localized version of the show. If no official \(langName) localization exists, keep the original English spelling — 
-            - For slang and in-universe terms:  \(langName) equivalents that match the show's tone
-            - If you're not confident about a specific translation, mark it with [?]
-            -  with common speech recognition mishearings
-              Format: misheard → correct (e.g. "soups" → "supes")
+        
+        """
 
-            
-            """,
-            "messages": [["role": "user", "content": "Show: \(showName)"]]
+        // Fallback chain: try Sonnet first (best quality), then Haiku (usually available
+        // under Sonnet overload), then Opus (independent capacity pool, last resort).
+        // Anthropic recommends exponential backoff but different models have independent
+        // capacity, so falling over to a sibling model is faster than waiting.
+        let fallbackModels: [String] = [
+            ClaudeModel.sonnet.rawValue,
+            ClaudeModel.haiku.rawValue,
+            "claude-opus-4-1-20250805"
         ]
 
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
+        for modelID in fallbackModels {
+            if Task.isCancelled { return nil }
 
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let content = json["content"] as? [[String: Any]],
-                  let firstBlock = content.first,
-                  let result = firstBlock["text"] as? String else {
+            var request = URLRequest(url: Constants.apiURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+            request.timeoutInterval = 15
+
+            let body: [String: Any] = [
+                "model": modelID,
+                "max_tokens": 500,
+                "stream": false,
+                "temperature": 0.3,
+                "system": systemPrompt,
+                "messages": [["role": "user", "content": "Show: \(showName)"]]
+            ]
+
+            do {
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            } catch {
+                print("[Glossary] FAILED: body encode — \(error)")
                 return nil
             }
 
-            return Glossary.parse(raw: result, showName: showName, isUserProvided: isUserProvided)
-        } catch {
-            print("[Glossary] FAILED: \(error)")
-            return nil
+            print("[Glossary] Trying model: \(modelID)")
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    print("[Glossary] \(modelID): no HTTPURLResponse — trying next model")
+                    continue
+                }
+                if httpResponse.statusCode != 200 {
+                    let bodyPreview = String(data: data, encoding: .utf8)?.prefix(400) ?? "<non-utf8>"
+                    // 429 rate limit, 529 overloaded, 503 unavailable — try next model
+                    if httpResponse.statusCode == 429 || httpResponse.statusCode == 529 || httpResponse.statusCode == 503 {
+                        print("[Glossary] \(modelID) transient HTTP \(httpResponse.statusCode) — trying next model. Body: \(bodyPreview)")
+                        continue
+                    }
+                    // Hard error (bad request, auth, etc.) — no point trying siblings
+                    print("[Glossary] FAILED: HTTP \(httpResponse.statusCode) — \(bodyPreview)")
+                    return nil
+                }
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    let bodyPreview = String(data: data, encoding: .utf8)?.prefix(400) ?? "<non-utf8>"
+                    print("[Glossary] FAILED: JSON parse — \(bodyPreview)")
+                    return nil
+                }
+                guard let content = json["content"] as? [[String: Any]],
+                      let firstBlock = content.first,
+                      let result = firstBlock["text"] as? String else {
+                    print("[Glossary] FAILED: missing content/text in response — json keys: \(json.keys)")
+                    return nil
+                }
+
+                guard let glossary = Glossary.parse(raw: result, showName: showName, isUserProvided: isUserProvided) else {
+                    let rawPreview = result.prefix(400)
+                    print("[Glossary] \(modelID) parse returned nil — raw: \(rawPreview) — trying next model")
+                    continue
+                }
+                // Sanity check: Claude sometimes returns a tiny/empty glossary
+                // (model laziness or prompt mis-interpretation). Require at least
+                // 5 term lines to consider the response usable; otherwise fallback
+                // to the next model in the chain.
+                let termLineCount = glossary.content.components(separatedBy: "\n")
+                    .filter { $0.contains("→") || $0.contains("—") }
+                    .count
+                if termLineCount < 5 {
+                    let rawPreview = result.prefix(400)
+                    print("[Glossary] \(modelID) returned only \(termLineCount) term lines — trying next model. Raw: \(rawPreview)")
+                    continue
+                }
+                print("[Glossary] Success on \(modelID) — \(termLineCount) term lines")
+                return glossary
+            } catch {
+                // Cancelled URLSession (e.g. user switched language mid-request).
+                // Not an error — just a superseded request.
+                if (error as? URLError)?.code == .cancelled {
+                    print("[Glossary] Cancelled (superseded)")
+                    return nil
+                }
+                print("[Glossary] \(modelID) network error — trying next model: \(error)")
+                continue
+            }
         }
+
+        print("[Glossary] FAILED: all models in fallback chain exhausted")
+        return nil
     }
 
     /// Detect topic AND generate glossary in a single Sonnet call (for auto-detect in cinema mode).

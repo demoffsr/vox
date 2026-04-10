@@ -48,6 +48,8 @@ struct Glossary {
 
     /// Parse raw Claude response into a Glossary.
     /// Expected format: glossary lines, then optional `## ASR` section.
+    /// Claude sometimes ignores "no preamble" instructions and adds a conversational
+    /// intro — we strip it by skipping to the first line containing a term separator.
     static func parse(
         raw: String,
         showName: String,
@@ -59,25 +61,44 @@ struct Glossary {
         let parts = trimmed.components(separatedBy: "## ASR")
         let glossaryRaw = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Cap at 30 lines
-        let lines = glossaryRaw.components(separatedBy: "\n")
+        // Strip any preamble — drop lines until we hit the first term line (has → or —).
+        // This handles Sonnet's occasional conversational intros like
+        // "I notice you've provided the show name in Russian...".
+        let rawLines = glossaryRaw.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        let capped = Array(lines.prefix(30)).joined(separator: "\n")
+
+        guard let firstTermIdx = rawLines.firstIndex(where: { $0.contains("→") || $0.contains("—") }) else {
+            return nil
+        }
+        let strippedCount = firstTermIdx
+        let termLines = Array(rawLines[firstTermIdx...])
+
+        // Also drop any trailing non-term lines (explanations Claude adds at the end).
+        let termOnlyLines = termLines.filter { $0.contains("→") || $0.contains("—") }
+        guard !termOnlyLines.isEmpty else { return nil }
+
+        // Cap at 30 lines
+        let capped = Array(termOnlyLines.prefix(30)).joined(separator: "\n")
         guard !capped.isEmpty else { return nil }
+
+        if strippedCount > 0 {
+            print("[Glossary] parse: stripped \(strippedCount) preamble line(s)")
+        }
 
         let asrHints: String? = parts.count > 1
             ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
                 .components(separatedBy: "\n")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
+                // Filter out any "note:" / "explanation:" preambles in the ASR section too
+                .filter { !$0.isEmpty && ($0.contains("→") || $0.contains("—")) }
                 .joined(separator: ", ")
             : nil
 
         return Glossary(
             showName: showName,
             content: capped,
-            asrHints: asrHints,
+            asrHints: (asrHints?.isEmpty == false) ? asrHints : nil,
             confidence: isUserProvided ? .strict : .soft
         )
     }
