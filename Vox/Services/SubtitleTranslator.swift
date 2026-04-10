@@ -8,6 +8,49 @@ final class SubtitleTranslator {
         self.apiKey = apiKey
     }
 
+    // MARK: - ASR Cleanup (Phase 2)
+
+    /// Result of sanitizing Haiku output in correctASRTerms.
+    /// `.accept` means the cleaned text passed all guardrails.
+    /// `.reject` means a guardrail fired — caller should use the original text.
+    enum ASRCleanupDecision: Equatable {
+        case accept(String)
+        case reject(reason: String)
+    }
+
+    /// Client-side sanitizer for Haiku output in `correctASRTerms`.
+    /// Blocks empty output, length hallucinations, and non-ASCII leaks
+    /// (translation escape). Trim is applied before length checks.
+    /// See docs/superpowers/specs/2026-04-10-asr-cleanup-design.md §Output Sanitizer.
+    static func sanitizeCleanupResult(original: String, cleaned: String) -> ASRCleanupDecision {
+        let stripped = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. Empty or whitespace-only — model returned nothing usable.
+        if stripped.isEmpty {
+            return .reject(reason: "empty")
+        }
+
+        // 2. Length hallucination — model rephrased, completed, or expanded.
+        //    Compare against 1.5x the original length.
+        let maxAllowed = Int(Double(original.count) * 1.5)
+        if stripped.count > maxAllowed {
+            return .reject(reason: "length hallucination (IN:\(original.count) OUT:\(stripped.count))")
+        }
+
+        // 3. Non-ASCII leak — cleaned contains a non-ASCII character that
+        //    was NOT present in the original. Common failure: model slipped
+        //    into translating despite the "stay in English" rule.
+        let originalNonASCII = Set(original.unicodeScalars.filter { !$0.isASCII })
+        for scalar in stripped.unicodeScalars where !scalar.isASCII {
+            if !originalNonASCII.contains(scalar) {
+                let hex = String(scalar.value, radix: 16, uppercase: true)
+                return .reject(reason: "non-ASCII leak (U+\(hex))")
+            }
+        }
+
+        return .accept(stripped)
+    }
+
     func translateStreaming(
         text: String,
         language: TargetLanguage,
