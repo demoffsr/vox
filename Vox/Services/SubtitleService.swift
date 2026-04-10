@@ -3,6 +3,11 @@ import AVFoundation
 
 @MainActor
 final class SubtitleService {
+    // Phase 2 kill switch — flip to false and rebuild to disable the ASR
+    // cleanup stage. See docs/apple-speech-tuning-research.md §8 and
+    // docs/superpowers/specs/2026-04-10-asr-cleanup-design.md.
+    static let enableASRCleanup = true
+
     private let audioCapture = SystemAudioCapture()
     private let transcriber = LiveTranscriber()
     private let subtitlePanel = SubtitlePanel()
@@ -464,9 +469,21 @@ final class SubtitleService {
         finalTask = Task {
             defer { self.finalTask = nil }
             do {
+                // Phase 2: ASR cleanup stage. Runs only when a glossary is
+                // available for this session (cinema-only in practice; lecture
+                // mode never generates a glossary). Any failure inside
+                // correctASRTerms returns the original text — cancellation
+                // rethrows so the outer catch handles it.
+                var textToTranslate = text
+                if Self.enableASRCleanup, let glossary {
+                    textToTranslate = try await translator.correctASRTerms(
+                        text: text, glossary: glossary, topic: currentTopic
+                    )
+                }
+
                 let finalModel: ClaudeModel = isCinema ? .haiku : .sonnet
                 let result = try await translator.translateStreaming(
-                    text: text,
+                    text: textToTranslate,
                     language: targetLang,
                     model: finalModel,
                     previousTurns: prevTurns,
@@ -479,7 +496,7 @@ final class SubtitleService {
                 guard !result.isEmpty else { return }
                 print("[Final] \(targetLang.rawValue): \"\(result)\"")
 
-                self.recentTranslations.append((original: text, translated: result))
+                self.recentTranslations.append((original: textToTranslate, translated: result))
                 if self.recentTranslations.count > self.maxTranslationContext {
                     self.recentTranslations.removeFirst()
                 }
