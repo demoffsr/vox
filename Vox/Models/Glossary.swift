@@ -44,6 +44,21 @@ struct Glossary {
         return "\nNote: ASR may have misheard these words: \(asrHints)"
     }
 
+    /// English left-hand-side terms from content lines (character names, in-universe terms,
+    /// organization names, etc.). Parses both "→" and "—" separators; strips "[?]" uncertainty
+    /// markers. Used by ASR cleanup stage and SubtitleService.pushVocabularyToTranscriber.
+    var englishTerms: [String] {
+        content.components(separatedBy: "\n").compactMap { line -> String? in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return nil }
+            guard let sepIdx = trimmed.firstIndex(where: { $0 == "→" || $0 == "—" }) else { return nil }
+            let left = trimmed[..<sepIdx]
+                .replacingOccurrences(of: "[?]", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            return left.isEmpty ? nil : String(left)
+        }
+    }
+
     // MARK: - Parsing
 
     /// Parse raw Claude response into a Glossary.

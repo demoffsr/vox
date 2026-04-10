@@ -552,17 +552,8 @@ final class SubtitleService {
 
         if let glossary = currentGlossary {
             // (2) Left side of each content line — the English term.
-            //     Format: "English term → Russian equivalent" (optionally " [?]").
-            //     Parse both potential separators: "→" and em-dash "—".
-            for line in glossary.content.components(separatedBy: "\n") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                guard !trimmed.isEmpty else { continue }
-                guard let sepIdx = trimmed.firstIndex(where: { $0 == "→" || $0 == "—" }) else { continue }
-                let left = trimmed[..<sepIdx]
-                    .replacingOccurrences(of: "[?]", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                if !left.isEmpty { words.append(String(left)) }
-            }
+            //     Single source of truth lives on Glossary.englishTerms.
+            words.append(contentsOf: glossary.englishTerms)
 
             // (3) Right side of asrHints — the correct spelling.
             //     Format: `"misheard" → "correct", "x" → "y"`
