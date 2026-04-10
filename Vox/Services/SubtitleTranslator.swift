@@ -51,6 +51,146 @@ final class SubtitleTranslator {
         return .accept(stripped)
     }
 
+    /// Phase 2 ASR cleanup stage. Corrects misheard proper nouns and
+    /// show-specific terms in raw ASR English text using the per-session
+    /// glossary. Returns the corrected text, or the original text on any
+    /// non-cancellation failure (timeout, HTTP error, parse error, sanitizer
+    /// rejection). Cancellation is rethrown so the caller's Task cancels
+    /// cleanly.
+    ///
+    /// Invariant: this method never calls the main translation API, never
+    /// touches SubtitleService.rateLimitUntil, and never mutates any state
+    /// outside its own scope. It is safe to drop in front of any final
+    /// translation call; at worst it is a no-op.
+    ///
+    /// See docs/superpowers/specs/2026-04-10-asr-cleanup-design.md.
+    func correctASRTerms(text: String, glossary: Glossary, topic: String?) async throws -> String {
+        // Empty input → skip API call.
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return text
+        }
+
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 3
+
+        // Build the system prompt. Structure: show context, list of correct
+        // English terms, optional list of known mishearings, strict rules.
+        let englishTermsBlock = glossary.englishTerms.joined(separator: "\n")
+
+        var system = """
+        /* prompt redacted */ \
+        , so character \
+        
+        """
+
+        if let topic {
+            system += "\n\nShow: \(topic)"
+        }
+
+        system += "\n\n\n\(englishTermsBlock)"
+
+        if let hints = glossary.asrHints, !hints.isEmpty {
+            // glossary.asrHints is stored as a single comma-joined string like
+            // "soups → supes, fought → Vought". Render one pair per line so
+            // Haiku has an easier time parsing the replacement list.
+            let hintLines = hints
+                .components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            system += "\n\n\n\(hintLines)"
+        }
+
+        system += """
+
+
+        STRICT RULES:
+        - 
+        - 
+        - 
+        - 
+        - 
+        - 
+        - 
+        - 
+
+        
+        """
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.haiku.rawValue,
+            "max_tokens": 200,
+            "stream": false,
+            "temperature": 0.0,
+            "system": system,
+            "messages": [["role": "user", "content": text]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            print("[Cleanup] body encode failed: \(error) — using raw")
+            return text
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("[Cleanup] no HTTPURLResponse — using raw")
+                return text
+            }
+
+            if httpResponse.statusCode != 200 {
+                print("[Cleanup] HTTP \(httpResponse.statusCode) — using raw")
+                return text
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let rawResult = firstBlock["text"] as? String else {
+                print("[Cleanup] parse fail — using raw")
+                return text
+            }
+
+            switch Self.sanitizeCleanupResult(original: text, cleaned: rawResult) {
+            case .accept(let cleaned):
+                if cleaned == text {
+                    print("[Cleanup] unchanged")
+                } else {
+                    print("[Cleanup] FIX: \"\(cleaned)\"")
+                }
+                return cleaned
+            case .reject(let reason):
+                print("[Cleanup] REJECTED: \(reason) — using raw")
+                return text
+            }
+        } catch {
+            // Cancellation must propagate so the outer finalTask cancels cleanly.
+            if error is CancellationError {
+                print("[Cleanup] cancelled")
+                throw error
+            }
+            if let urlErr = error as? URLError {
+                if urlErr.code == .cancelled {
+                    print("[Cleanup] cancelled")
+                    throw error
+                }
+                if urlErr.code == .timedOut {
+                    print("[Cleanup] TIMEOUT — using raw")
+                    return text
+                }
+            }
+            print("[Cleanup] network error: \(error) — using raw")
+            return text
+        }
+    }
+
     func translateStreaming(
         text: String,
         language: TargetLanguage,
