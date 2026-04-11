@@ -37,26 +37,26 @@ final class RadialMenuPanel: NSPanel {
         self.origin = origin
 
         let size: CGFloat = 340
-        let rect = NSRect(
+        var rect = NSRect(
             x: origin.x - size / 2,
             y: origin.y - size / 2,
             width: size,
             height: size
         )
 
+        // Clamp to the screen containing the cursor so glass doesn't span monitors
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(origin) }) ?? NSScreen.main
+        if let visibleFrame = screen?.visibleFrame {
+            rect.origin.x = min(max(rect.origin.x, visibleFrame.minX), visibleFrame.maxX - size)
+            rect.origin.y = min(max(rect.origin.y, visibleFrame.minY), visibleFrame.maxY - size)
+        }
+
         super.init(
             contentRect: rect,
-            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-
-        // Hide titlebar while keeping compositing pipeline for Liquid Glass
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
-        standardWindowButton(.closeButton)?.isHidden = true
-        standardWindowButton(.miniaturizeButton)?.isHidden = true
-        standardWindowButton(.zoomButton)?.isHidden = true
 
         isFloatingPanel = true
         level = .floating
@@ -76,26 +76,18 @@ final class RadialMenuPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func showAnimated() {
-        appearance = NSApp.effectiveAppearance
-
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let hostingView = NSHostingView(rootView: RadialMenuView(
             items: items,
             onAction: { [weak self] in
                 self?.dismissAnimated()
             }
-        ).preferredColorScheme(isDark ? .dark : .light))
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = CGColor.clear
-
+        ))
         contentView = hostingView
 
-        // Start invisible — glass compositing needs time to resolve correct appearance
         alphaValue = 0
         orderFrontRegardless()
 
-        // Wait for glass to composite, then show + trigger animation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.alphaValue = 1
             NotificationCenter.default.post(name: .radialMenuReady, object: nil)
         }
@@ -135,12 +127,11 @@ struct RadialMenuView: View {
     let items: [RadialMenuItem]
     let onAction: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
     @State private var isShowing = false
     @State private var isDismissing = false
     @State private var hoveredItem: String?
 
-    // Evenly spaced around circle — triangle (3), diamond (4), etc.
+    // Evenly spaced around circle
     private func offset(for index: Int, count: Int) -> CGSize {
         let radius: CGFloat = 68
         let startAngle: CGFloat = 90
@@ -186,7 +177,7 @@ struct RadialMenuView: View {
             item.action()
             onAction()
         }) {
-            VStack(spacing: 5) {
+            VStack(spacing: 4) {
                 ZStack {
                     Group {
                         if item.isSystemIcon {
@@ -203,27 +194,17 @@ struct RadialMenuView: View {
                     .foregroundStyle(isActive ? item.tint : .primary)
                 }
                 .frame(width: 52, height: 52)
-                .glassEffect(
-                    isActive ? .regular.tint(item.tint).interactive() : .regular.interactive(),
-                    in: .circle
-                )
+                .background(.thinMaterial, in: .circle)
                 .overlay {
-                    if colorScheme == .light {
-                        Circle().strokeBorder(.white.opacity(0.8), lineWidth: 1.5)
+                    if isActive {
+                        Circle().fill(item.tint.opacity(0.15))
                     }
                 }
 
                 Text(item.label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .glassEffect(.regular, in: .capsule)
-                    .overlay {
-                        if colorScheme == .light {
-                            Capsule().strokeBorder(.white.opacity(0.8), lineWidth: 1.5)
-                        }
-                    }
+                    .drawingGroup()
             }
             .scaleEffect(isHovered ? 1.1 : 1.0)
         }

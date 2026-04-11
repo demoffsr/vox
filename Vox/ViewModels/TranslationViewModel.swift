@@ -56,7 +56,7 @@ final class TranslationViewModel {
             translatedText = ""
             error = nil
             isTranslating = true
-            targetLanguage = .auto
+            targetLanguage = resolvedAutoTarget(for: text)
             showPanel()
 
             await runTranslation(text: text, apiKey: apiKey)
@@ -95,7 +95,7 @@ final class TranslationViewModel {
         translatedText = ""
         error = nil
         isTranslating = true
-        targetLanguage = .auto
+        targetLanguage = resolvedAutoTarget(for: text)
         showPanel()
 
         currentTask?.cancel()
@@ -127,6 +127,18 @@ final class TranslationViewModel {
     private func showPanel() {
         isPanelVisible = true
         onPanelVisibilityChanged?()
+    }
+
+    /// Detects the source language locally and picks the appropriate target
+    /// based on the user's primary/secondary preferences. Replaces the old
+    /// hard-coded RU↔EN `.auto` behavior.
+    private func resolvedAutoTarget(for text: String) -> TargetLanguage {
+        let detected = LanguageDetector.detect(text: text)
+        return LanguageDetector.resolveTarget(
+            for: detected,
+            primary: AppSettings.shared.primaryTargetLanguage,
+            secondary: AppSettings.shared.secondaryTargetLanguage
+        )
     }
 
     private func runTranslation(text: String, apiKey: String) async {

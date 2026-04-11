@@ -12,6 +12,9 @@ enum Constants {
         let langInstruction: String
         switch targetLanguage {
         case .auto:
+            // Legacy RU↔EN fallback. The ⌘T flow now resolves a concrete target via
+            // LanguageDetector before calling this function, so this branch is only
+            // reached if a caller explicitly passes `.auto`. Kept for safety.
             langInstruction = """
             - If the text is not in Russian, translate to Russian
             - If the text is in Russian, translate to English

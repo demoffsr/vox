@@ -83,4 +83,59 @@ final class AppSettings {
             UserDefaults.standard.set(newValue.rawValue, forKey: "subtitleDisplayMode")
         }
     }
+
+    /// User's native/primary translation target. Used by auto language detection on ⌘T —
+    /// text is translated to this language unless it's already in it. Defaults to the system
+    /// locale's language when it maps to a supported `TargetLanguage`, otherwise `.english`.
+    var primaryTargetLanguage: TargetLanguage {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: "primaryTargetLanguage"),
+                  let value = TargetLanguage(rawValue: raw),
+                  value != .auto
+            else {
+                return Self.defaultPrimaryTargetLanguage
+            }
+            return value
+        }
+        set {
+            guard newValue != .auto else { return }
+            UserDefaults.standard.set(newValue.rawValue, forKey: "primaryTargetLanguage")
+        }
+    }
+
+    /// Fallback target used when the detected source language already matches the primary target.
+    /// Defaults to `.english`, or `.russian` when the primary is already English.
+    var secondaryTargetLanguage: TargetLanguage {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: "secondaryTargetLanguage"),
+                  let value = TargetLanguage(rawValue: raw),
+                  value != .auto
+            else {
+                return Self.defaultSecondaryTargetLanguage(primary: primaryTargetLanguage)
+            }
+            return value
+        }
+        set {
+            guard newValue != .auto else { return }
+            UserDefaults.standard.set(newValue.rawValue, forKey: "secondaryTargetLanguage")
+        }
+    }
+
+    private static var defaultPrimaryTargetLanguage: TargetLanguage {
+        let systemCode = Locale.current.language.languageCode?.identifier
+        switch systemCode {
+        case "ru": return .russian
+        case "es": return .spanish
+        case "fr": return .french
+        case "de": return .german
+        case "zh": return .chinese
+        case "ja": return .japanese
+        case "en": return .english
+        default:   return .english
+        }
+    }
+
+    private static func defaultSecondaryTargetLanguage(primary: TargetLanguage) -> TargetLanguage {
+        primary == .english ? .russian : .english
+    }
 }
