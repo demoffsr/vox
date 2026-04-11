@@ -77,7 +77,8 @@ nonisolated enum VoxTokens {
 
 // MARK: - Shared Components
 
-/// Horizontal gradient hairline. Fades in/out from the edges so it doesn't cut the glass hard.
+/// Gradient hairline that fades in/out from the edges so it doesn't cut the glass hard.
+/// Defaults to horizontal; pass `axis: .vertical` for a 1pt vertical rule.
 /// Used as the section divider across every panel.
 struct GradientDivider: View {
     var axis: Axis = .horizontal
