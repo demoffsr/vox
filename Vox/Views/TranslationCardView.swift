@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Point-translation card. Matches the lecture translation window (TranslationStreamView)
+/// exactly: title bar with language pill + close button, gradient divider, empty/loading/
+/// content state, gradient divider, bottom bar with Copy.
 struct TranslationCardView: View {
     @Bindable var viewModel: TranslationViewModel
     @State private var copied = false
@@ -7,41 +10,28 @@ struct TranslationCardView: View {
     @State private var hoveredLanguage: TargetLanguage?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Language bar at top
-            languageBar
+        VStack(spacing: 0) {
+            titleBar
+            GradientDivider()
 
-            // Inline language picker (expands when open)
             if showLanguagePicker {
                 languagePickerInline
+                GradientDivider()
             }
 
-            gradientDivider
-
-            // Source text
-            if !viewModel.sourceText.isEmpty {
-                sourceSection
-                gradientDivider
-            }
-
-            // Translation
-            translationSection
-
-            gradientDivider
-
-            // Bottom: Copy button
+            cardContent
+            GradientDivider()
             bottomBar
         }
-        .frame(width: 380)
+        .frame(width: 420)
         .environment(\.colorScheme, .dark)
         .animation(.easeOut(duration: 0.2), value: showLanguagePicker)
     }
 
-    // MARK: - Language Bar
+    // MARK: - Title Bar  (mirrors TranslationStreamView.titleBar)
 
-    private var languageBar: some View {
+    private var titleBar: some View {
         HStack(spacing: 8) {
-            // Target language pill
             Button(action: {
                 withAnimation(.easeOut(duration: 0.2)) {
                     showLanguagePicker.toggle()
@@ -51,7 +41,7 @@ struct TranslationCardView: View {
                     Text(viewModel.targetLanguage.flag)
                         .font(.system(size: 13))
                     Text(viewModel.targetLanguage == .auto ? "Auto" : viewModel.targetLanguage.rawValue)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(VoxTokens.Typo.small)
                         .foregroundStyle(.white.opacity(0.8))
                     Image(systemName: showLanguagePicker ? "chevron.up" : "chevron.down")
                         .font(.system(size: 8, weight: .bold))
@@ -59,26 +49,32 @@ struct TranslationCardView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(.white.opacity(showLanguagePicker ? 0.12 : 0.08))
-                )
+                .background(Capsule().fill(.white.opacity(showLanguagePicker ? 0.12 : 0.08)))
             }
             .buttonStyle(.plain)
 
             if viewModel.isTranslating {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(.blue.opacity(0.7))
+                HStack(spacing: 5) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.7)
+                    Text("Translating")
+                        .font(VoxTokens.Typo.tiny)
+                        .foregroundStyle(.white.opacity(0.3))
+                }
             }
 
             Spacer()
+
+            VoxCircleIconButton(icon: "xmark") {
+                viewModel.dismissPanel()
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
 
-    // MARK: - Inline Language Picker
+    // MARK: - Inline Language Picker  (mirrors TranslationStreamView.languagePickerInline)
 
     private var languagePickerInline: some View {
         VStack(spacing: 1) {
@@ -96,7 +92,7 @@ struct TranslationCardView: View {
                             .font(.system(size: 14))
                         Text(lang.rawValue)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(VoxTokens.Ink.secondary)
                         Spacer()
                         if lang == viewModel.targetLanguage {
                             Image(systemName: "checkmark")
@@ -107,8 +103,8 @@ struct TranslationCardView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
                     .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(hoveredLanguage == lang ? .white.opacity(0.06) : .clear)
+                        RoundedRectangle(cornerRadius: VoxTokens.Radius.xs, style: .continuous)
+                            .fill(hoveredLanguage == lang ? VoxTokens.Ink.hairline : .clear)
                     )
                     .contentShape(Rectangle())
                 }
@@ -120,116 +116,82 @@ struct TranslationCardView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(.white.opacity(0.02))
+        .background(VoxTokens.Ink.floor)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
-    // MARK: - Source Text
+    // MARK: - Content  (empty / loading / error / translation — all in lecture's empty-state
+    // layout: centered icon + caption for non-happy paths, ScrollView for the result)
 
-    private var sourceSection: some View {
-        HStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(.blue.opacity(0.4))
-                .frame(width: 2)
-                .padding(.vertical, 4)
+    @ViewBuilder
+    private var cardContent: some View {
+        if let error = viewModel.error {
+            emptyState(icon: "exclamationmark.circle", caption: error, tint: VoxTokens.Ink.subtle)
+        } else if viewModel.translatedText.isEmpty && viewModel.isTranslating {
+            emptyState(icon: "ellipsis.bubble", caption: "Translating…", tint: VoxTokens.Ink.faint)
+        } else if viewModel.translatedText.isEmpty {
+            emptyState(icon: "text.bubble", caption: "Waiting for text…", tint: VoxTokens.Ink.faint)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !viewModel.sourceText.isEmpty {
+                        Text(viewModel.sourceText)
+                            .font(.system(size: 13))
+                            .foregroundStyle(VoxTokens.Ink.muted)
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
-            Text(viewModel.sourceText)
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.45))
-                .lineLimit(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 10)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.white.opacity(0.015))
-    }
-
-    // MARK: - Translation
-
-    private var translationSection: some View {
-        Group {
-            if let error = viewModel.error {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.orange.opacity(0.9))
-                    Text(error)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.orange.opacity(0.9))
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-            } else if viewModel.translatedText.isEmpty && viewModel.isTranslating {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.blue.opacity(0.7))
-                    Text("Translating...")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 24)
-            } else {
-                ScrollView {
                     Text(viewModel.translatedText)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white.opacity(0.95))
-                        .lineSpacing(4)
+                        .font(VoxTokens.Typo.bodyLg)
+                        .foregroundStyle(VoxTokens.Ink.primary)
+                        .lineSpacing(5)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .frame(minHeight: 30, maxHeight: 220)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
             }
+            .frame(minHeight: 60, maxHeight: 260)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
     }
 
-    // MARK: - Bottom Bar
+    /// Empty-state block mirroring TranslationStreamView.subtitlesContent empty branch.
+    private func emptyState(icon: String, caption: String, tint: Color) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 28))
+                .foregroundStyle(.white.opacity(0.12))
+            Text(caption)
+                .font(.system(size: 14))
+                .foregroundStyle(tint)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 50)
+    }
+
+    // MARK: - Bottom Bar  (mirrors TranslationStreamView.bottomBar, single Copy button)
 
     private var bottomBar: some View {
-        HStack {
+        HStack(spacing: 10) {
             Spacer()
 
-            Button(action: copyAction) {
-                HStack(spacing: 6) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(copied ? "Copied!" : "Copy")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(copied ? .green : .white.opacity(0.7))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(
-                    Capsule()
-                        .fill(copied ? .green.opacity(0.15) : .white.opacity(0.08))
-                )
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.translatedText.isEmpty)
-            .animation(.easeInOut(duration: 0.2), value: copied)
+            VoxCapsuleButton(
+                copied ? "Copied!" : "Copy",
+                icon: copied ? "checkmark" : "doc.on.doc",
+                isAccent: copied,
+                isDisabled: viewModel.translatedText.isEmpty,
+                action: copyAction
+            )
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
     }
 
     // MARK: - Helpers
-
-    private var gradientDivider: some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [.white.opacity(0), .white.opacity(0.06), .white.opacity(0)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(height: 1)
-    }
 
     private func copyAction() {
         viewModel.copyTranslation()

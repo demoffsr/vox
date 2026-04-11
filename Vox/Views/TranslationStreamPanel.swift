@@ -18,27 +18,11 @@ final class TranslationStreamPanel: NSPanel {
             defer: false
         )
 
-        isFloatingPanel = true
-        level = .floating
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = true
+        VoxPanelChrome.applyBaseConfiguration(self)
         isMovableByWindowBackground = true
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         animationBehavior = .utilityWindow
-        hidesOnDeactivate = false
-        becomesKeyOnlyIfNeeded = true
         minSize = NSSize(width: 400, height: 200)
         isReleasedWhenClosed = false
-
-        // Glass background (like Spotlight)
-        let visualEffect = NSVisualEffectView()
-        visualEffect.material = .hudWindow
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 16
-        visualEffect.layer?.masksToBounds = true
 
         let streamView = TranslationStreamView(
             viewModel: viewModel,
@@ -52,21 +36,7 @@ final class TranslationStreamPanel: NSPanel {
                 self?.dismiss()
             }
         )
-        let hostingView = NSHostingView(rootView: streamView)
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = CGColor.clear
-        hostingView.layer?.isOpaque = false
-
-        visualEffect.addSubview(hostingView)
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            hostingView.topAnchor.constraint(equalTo: visualEffect.topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
-            hostingView.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
-        ])
-
-        self.contentView = visualEffect
+        VoxPanelChrome.embed(streamView, in: self)
     }
 
     override var canBecomeKey: Bool { true }

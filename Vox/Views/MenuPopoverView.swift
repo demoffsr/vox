@@ -14,46 +14,46 @@ struct MenuPopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Translate action
+            // Translate action — mirrors the lecture window's title-bar pill/row rhythm
             Button(action: { coordinator.translate() }) {
                 HStack {
                     Image(systemName: "text.bubble")
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(VoxTokens.Ink.muted)
                         .frame(width: 18)
                     Text("Translate")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .font(VoxTokens.Typo.body)
+                        .foregroundStyle(VoxTokens.Ink.primary)
                     Spacer()
                     Text("⌘T")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.2))
+                        .foregroundStyle(VoxTokens.Ink.faint)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            sectionDivider
+            GradientDivider()
 
             // Subtitles toggle
             HStack(spacing: 8) {
                 Image(systemName: "captions.bubble")
                     .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(VoxTokens.Ink.subtle)
                     .frame(width: 18)
                 Text("Subtitles")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(VoxTokens.Typo.body)
+                    .foregroundStyle(VoxTokens.Ink.primary)
                 Spacer()
                 Toggle("", isOn: subtitlesBinding)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .tint(.green)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
 
             // Subtitle language picker — only when Subtitles ON and Translation OFF
             if isSubtitlesOn && !isTranslationOn {
@@ -65,116 +65,82 @@ struct MenuPopoverView: View {
             HStack(spacing: 8) {
                 Image(systemName: "character.bubble")
                     .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(VoxTokens.Ink.subtle)
                     .frame(width: 18)
                 Text("Translation")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(VoxTokens.Typo.body)
+                    .foregroundStyle(VoxTokens.Ink.primary)
                 Spacer()
                 Toggle("", isOn: translationBinding)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .tint(.blue)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
 
             // Language pickers — only when Translation is ON
             if isTranslationOn {
-                VStack(spacing: 0) {
-                    cardDivider
+                GradientDivider()
 
-                    HStack(spacing: 6) {
-                        Image(systemName: "ear")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 16)
-                        Text("Listen")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                        Spacer()
-                        Picker("", selection: listenBinding) {
-                            ForEach(SubtitleLanguage.allCases) { lang in
-                                Text("\(lang.flag) \(lang.displayName)").tag(lang)
-                            }
+                HStack(spacing: 6) {
+                    Image(systemName: "ear")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VoxTokens.Ink.subtle)
+                        .frame(width: 16)
+                    Text("Listen")
+                        .font(VoxTokens.Typo.small)
+                        .foregroundStyle(VoxTokens.Ink.tertiary)
+                    Spacer()
+                    Picker("", selection: listenBinding) {
+                        ForEach(SubtitleLanguage.allCases) { lang in
+                            Text("\(lang.flag) \(lang.displayName)").tag(lang)
                         }
-                        .pickerStyle(.menu)
-                        .frame(width: 130)
-                        .tint(.white.opacity(0.5))
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-
-                    cardDivider
-
-                    HStack(spacing: 6) {
-                        Image(systemName: "globe")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 16)
-                        Text("Into")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                        Spacer()
-                        Picker("", selection: translateLangBinding) {
-                            ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
-                                Text("\(lang.flag) \(lang.rawValue)").tag(lang)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 130)
-                        .tint(.white.opacity(0.5))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
+                    .pickerStyle(.menu)
+                    .frame(width: 130)
+                    .tint(VoxTokens.Ink.muted)
                 }
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(.white.opacity(0.04))
-                )
-                .padding(.horizontal, 10)
-                .padding(.top, 4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VoxTokens.Ink.subtle)
+                        .frame(width: 16)
+                    Text("Into")
+                        .font(VoxTokens.Typo.small)
+                        .foregroundStyle(VoxTokens.Ink.tertiary)
+                    Spacer()
+                    Picker("", selection: translateLangBinding) {
+                        ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                            Text("\(lang.flag) \(lang.rawValue)").tag(lang)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 130)
+                    .tint(VoxTokens.Ink.muted)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            sectionDivider
+            GradientDivider()
 
-            // Footer
-            HStack {
-                Button(action: openSettings) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "gear")
-                            .font(.system(size: 11))
-                        Text("Settings")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(.white.opacity(0.4))
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
+            // Footer — mirrors the lecture bottom bar (capsule pills, left+right)
+            HStack(spacing: 10) {
+                VoxCapsuleButton("Settings", icon: "gear", action: openSettings)
                 Spacer()
-
-                Button(action: { NSApplication.shared.terminate(nil) }) {
-                    HStack(spacing: 4) {
-                        Text("Quit")
-                            .font(.system(size: 12, weight: .medium))
-                        Text("⌘Q")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    }
-                    .foregroundStyle(.white.opacity(0.4))
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
+                VoxCapsuleButton("Quit", icon: "power") {
+                    NSApplication.shared.terminate(nil)
                 }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .padding(.vertical, 10)
         }
-        .frame(width: 260)
-        .padding(.vertical, 6)
+        .frame(width: 280)
         .environment(\.colorScheme, .dark)
         .animation(.easeOut(duration: 0.2), value: isTranslationOn)
         .animation(.easeOut(duration: 0.2), value: isSubtitlesOn)
@@ -272,17 +238,17 @@ struct MenuPopoverView: View {
 
     private var subtitleLanguagePicker: some View {
         VStack(spacing: 0) {
-            cardDivider
+            GradientDivider()
 
             // Language picker row
             HStack(spacing: 6) {
                 Image(systemName: "ear")
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .foregroundStyle(VoxTokens.Ink.subtle)
                     .frame(width: 16)
                 Text("Language")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(VoxTokens.Typo.small)
+                    .foregroundStyle(VoxTokens.Ink.tertiary)
                 Spacer()
                 Picker("", selection: subtitleLangBinding) {
                     ForEach(SubtitleLanguage.allCases) { lang in
@@ -299,7 +265,7 @@ struct MenuPopoverView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(width: 130)
-                .tint(.white.opacity(0.5))
+                .tint(VoxTokens.Ink.muted)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
@@ -313,7 +279,7 @@ struct MenuPopoverView: View {
                         Text("Install languages")
                             .font(.system(size: 10))
                     }
-                    .foregroundStyle(.white.opacity(0.25))
+                    .foregroundStyle(VoxTokens.Ink.faint)
                 }
                 .buttonStyle(.plain)
 
@@ -334,21 +300,14 @@ struct MenuPopoverView: View {
                         Text("Refresh")
                             .font(.system(size: 10))
                     }
-                    .foregroundStyle(.white.opacity(0.25))
+                    .foregroundStyle(VoxTokens.Ink.faint)
                 }
                 .buttonStyle(.plain)
                 .disabled(isRefreshing)
             }
             .padding(.horizontal, 14)
-            .padding(.bottom, 4)
+            .padding(.bottom, 6)
         }
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.white.opacity(0.04))
-        )
-        .padding(.horizontal, 10)
-        .padding(.top, 4)
     }
 
     /// Binding that opens Keyboard Settings when user picks an uninstalled language.
@@ -382,19 +341,4 @@ struct MenuPopoverView: View {
         }
     }
 
-    // MARK: - Components
-
-    private var sectionDivider: some View {
-        Rectangle()
-            .fill(.white.opacity(0.06))
-            .frame(height: 1)
-            .padding(.vertical, 4)
-    }
-
-    private var cardDivider: some View {
-        Rectangle()
-            .fill(.white.opacity(0.04))
-            .frame(height: 1)
-            .padding(.horizontal, 10)
-    }
 }

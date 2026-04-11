@@ -63,14 +63,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let settingsView = SettingsView()
+        // Use a .titled window with fullSizeContentView so the system close button stays
+        // intact while the content extends under a transparent titlebar, letting the
+        // NSVisualEffectView glass show through the full window height.
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Vox Settings"
-        window.contentView = NSHostingView(rootView: settingsView)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+
+        // Glass content — same material as the lecture window for a consistent language.
+        let visualEffect = NSVisualEffectView()
+        visualEffect.material = .hudWindow
+        visualEffect.blendingMode = .behindWindow
+        visualEffect.state = .active
+
+        let hostingView = NSHostingView(rootView: settingsView)
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = CGColor.clear
+
+        visualEffect.addSubview(hostingView)
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hostingView.topAnchor.constraint(equalTo: visualEffect.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
+        ])
+
+        window.contentView = visualEffect
         window.center()
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)

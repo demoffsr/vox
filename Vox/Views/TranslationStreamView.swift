@@ -17,20 +17,20 @@ struct TranslationStreamView: View {
     var body: some View {
         VStack(spacing: 0) {
             titleBar
-            gradientDivider
+            GradientDivider()
 
             if showLanguagePicker {
                 languagePickerInline
-                gradientDivider
+                GradientDivider()
             }
 
             if viewModel.availableTabs.count > 1 {
                 tabBar
-                gradientDivider
+                GradientDivider()
             }
 
             streamContent
-            gradientDivider
+            GradientDivider()
             bottomBar
         }
         .environment(\.colorScheme, .dark)
@@ -77,14 +77,7 @@ struct TranslationStreamView: View {
 
             Spacer()
 
-            Button(action: { onClose?() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.3))
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(.white.opacity(0.06)))
-            }
-            .buttonStyle(.plain)
+            VoxCircleIconButton(icon: "xmark") { onClose?() }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -308,20 +301,13 @@ struct TranslationStreamView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            Button(action: { viewModel.clear() }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("Clear")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(.white.opacity(0.5))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(Capsule().fill(.white.opacity(0.08)))
+            VoxCapsuleButton(
+                "Clear",
+                icon: "trash",
+                isDisabled: viewModel.accumulatedText.isEmpty
+            ) {
+                viewModel.clear()
             }
-            .buttonStyle(.plain)
-            .disabled(viewModel.accumulatedText.isEmpty)
 
             customizeButton
 
@@ -334,21 +320,13 @@ struct TranslationStreamView: View {
                     .foregroundStyle(.white.opacity(0.2))
             }
 
-            Button(action: copyAction) {
-                HStack(spacing: 6) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(copied ? "Copied!" : "Copy")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(copied ? .green : .white.opacity(0.7))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(Capsule().fill(copied ? .green.opacity(0.15) : .white.opacity(0.08)))
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.displayText.isEmpty)
-            .animation(.easeInOut(duration: 0.2), value: copied)
+            VoxCapsuleButton(
+                copied ? "Copied!" : "Copy",
+                icon: copied ? "checkmark" : "doc.on.doc",
+                isAccent: copied,
+                isDisabled: viewModel.displayText.isEmpty,
+                action: copyAction
+            )
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -391,18 +369,6 @@ struct TranslationStreamView: View {
     }
 
     // MARK: - Helpers
-
-    private var gradientDivider: some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [.white.opacity(0), .white.opacity(0.06), .white.opacity(0)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(height: 1)
-    }
 
     private func copyAction() {
         viewModel.copyAll()

@@ -1,17 +1,21 @@
 import SwiftUI
 
+/// Settings panel. Shares the lecture translation window's visual language:
+/// compact title bar, gradient dividers between sections, single flat surface
+/// (no nested cards), capsule pill buttons.
 struct SettingsView: View {
     @State private var settings = AppSettings.shared
     @State private var apiKeyInput: String = ""
     @State private var isAPIKeyVisible: Bool = false
     @State private var verificationStatus: VerificationStatus = .idle
-    @State private var isHovering = false
 
     private let keychainHelper = KeychainHelper()
 
     enum VerificationStatus: Equatable {
         case idle, verifying, success, failed(String)
     }
+
+    // MARK: - Bindings
 
     private var launchAtLoginBinding: Binding<Bool> {
         Binding(get: { settings.launchAtLogin }, set: { settings.launchAtLogin = $0 })
@@ -41,256 +45,308 @@ struct SettingsView: View {
         Binding(get: { settings.subtitleTranslationModel }, set: { settings.subtitleTranslationModel = $0 })
     }
 
+    private var primaryTargetLanguageBinding: Binding<TargetLanguage> {
+        Binding(get: { settings.primaryTargetLanguage }, set: { settings.primaryTargetLanguage = $0 })
+    }
+
+    private var secondaryTargetLanguageBinding: Binding<TargetLanguage> {
+        Binding(get: { settings.secondaryTargetLanguage }, set: { settings.secondaryTargetLanguage = $0 })
+    }
+
+    // MARK: - Body
+
     var body: some View {
-        ZStack {
-            // Background gradient
-            LinearGradient(
-                colors: [
-                    Color(red: 0.08, green: 0.08, blue: 0.12),
-                    Color(red: 0.05, green: 0.05, blue: 0.08)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+        VStack(spacing: 0) {
+            titleBar
+            GradientDivider()
 
-            VStack(spacing: 0) {
-                // Header
-                header
-                    .padding(.top, 24)
-                    .padding(.bottom, 20)
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    sectionHeader("General")
+                    generalRows
 
-                // Content
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 24) {
-                        generalSection
-                        subtitlesSection
-                        translationSection
-                        apiSection
-                        aboutSection
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
+                    sectionHeader("Subtitles")
+                    subtitlesRows
+
+                    sectionHeader("Translation")
+                    translationRows
+
+                    sectionHeader("API")
+                    apiRows
+
+                    sectionHeader("About")
+                    aboutRows
                 }
+                .padding(.bottom, 14)
             }
         }
-        .frame(width: 440, height: 540)
+        .frame(width: 480, height: 600)
         .environment(\.colorScheme, .dark)
         .onAppear {
             apiKeyInput = (try? keychainHelper.load()) ?? ""
         }
     }
 
-    // MARK: - Header
+    // MARK: - Title Bar  (mirrors TranslationStreamView.titleBar rhythm)
 
-    private var header: some View {
-        VStack(spacing: 6) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.blue.opacity(0.6), .purple.opacity(0.4)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 44, height: 44)
-
-                Image(systemName: "bubble.left.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(.white)
-            }
-            .shadow(color: .blue.opacity(0.3), radius: 12, y: 4)
-
+    private var titleBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bubble.left.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(VoxTokens.Ink.muted)
+            Text("Settings")
+                .font(VoxTokens.Typo.body)
+                .foregroundStyle(VoxTokens.Ink.primary)
+            Spacer()
             Text("Vox")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-
-            Text("AI Translator")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.35))
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(VoxTokens.Ink.faint)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .padding(.top, 18) // leave room for the transparent traffic-light titlebar
+    }
+
+    // MARK: - Section Header
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(VoxTokens.Ink.faint)
+            .tracking(0.6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.top, 18)
+            .padding(.bottom, 8)
     }
 
     // MARK: - General
 
-    private var generalSection: some View {
-        card {
-            row(icon: "command", title: "Hotkey") {
-                HStack(spacing: 3) {
-                    keyCap("⌘")
-                    keyCap("T")
-                }
+    @ViewBuilder
+    private var generalRows: some View {
+        row(icon: "command", title: "Hotkey") {
+            HStack(spacing: 3) {
+                keyCap("⌘")
+                keyCap("T")
             }
-
-            divider
-
-            row(icon: "power", title: "Launch at login") {
-                Toggle("", isOn: launchAtLoginBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(.blue)
-            }
+        }
+        rowDivider
+        row(icon: "power", title: "Launch at login") {
+            Toggle("", isOn: launchAtLoginBinding)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.blue)
         }
     }
 
     // MARK: - Subtitles
 
-    private var subtitlesSection: some View {
-        card {
-            row(icon: "captions.bubble", title: "Language") {
-                Picker("", selection: subtitleLanguageBinding) {
-                    ForEach(SubtitleLanguage.allCases) { lang in
-                        Text("\(lang.flag) \(lang.displayName)").tag(lang)
-                    }
+    @ViewBuilder
+    private var subtitlesRows: some View {
+        row(icon: "captions.bubble", title: "Language") {
+            Picker("", selection: subtitleLanguageBinding) {
+                ForEach(SubtitleLanguage.allCases) { lang in
+                    Text("\(lang.flag) \(lang.displayName)").tag(lang)
                 }
-                .pickerStyle(.menu)
-                .frame(width: 145)
-                .tint(.white.opacity(0.7))
             }
-
-            divider
-
-            row(icon: "rectangle.bottomhalf.inset.filled", title: "Overlay panel") {
-                Toggle("", isOn: showNativeSubtitlesBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(.blue)
-            }
-
-            Text("Show floating subtitles over any app. Safari overlay always active.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.25))
-                .padding(.top, 4)
-                .padding(.leading, 28)
-
-            divider
-
-            row(icon: "character.bubble", title: "Translate to") {
-                Picker("", selection: subtitleTranslationLanguageBinding) {
-                    Text("Off").tag(TargetLanguage?.none)
-                    ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
-                        Text("\(lang.flag) \(lang.rawValue)").tag(Optional(lang))
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 145)
-                .tint(.white.opacity(0.7))
-            }
-
-            Text("Live translation via Claude API (streaming). Requires API key.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.25))
-                .padding(.top, 4)
-                .padding(.leading, 28)
-
-            divider
-
-            row(icon: "cpu", title: "Subtitle model") {
-                Picker("", selection: subtitleTranslationModelBinding) {
-                    ForEach(ClaudeModel.allCases) { model in
-                        Text(model.displayName).tag(model)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 145)
-                .tint(.white.opacity(0.7))
-            }
-
-            Text("Haiku is fast and cheap. Sonnet is slower but translates better.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.25))
-                .padding(.top, 4)
-                .padding(.leading, 28)
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
         }
+        rowDivider
+        row(icon: "rectangle.bottomhalf.inset.filled", title: "Overlay panel") {
+            Toggle("", isOn: showNativeSubtitlesBinding)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.blue)
+        }
+        hint("Show floating subtitles over any app. Safari overlay always active.")
+        rowDivider
+        row(icon: "character.bubble", title: "Translate to") {
+            Picker("", selection: subtitleTranslationLanguageBinding) {
+                Text("Off").tag(TargetLanguage?.none)
+                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                    Text("\(lang.flag) \(lang.rawValue)").tag(Optional(lang))
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+        hint("Live translation via Claude API (streaming). Requires API key.")
+        rowDivider
+        row(icon: "cpu", title: "Subtitle model") {
+            Picker("", selection: subtitleTranslationModelBinding) {
+                ForEach(ClaudeModel.allCases) { model in
+                    Text(model.displayName).tag(model)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+        hint("Haiku is fast and cheap. Sonnet is slower but translates better.")
     }
 
     // MARK: - Translation
 
-    private var translationSection: some View {
-        card {
-            row(icon: "sparkles", title: "Smart mode") {
-                Toggle("", isOn: smartModeBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .tint(.blue)
+    @ViewBuilder
+    private var translationRows: some View {
+        row(icon: "globe", title: "Primary language") {
+            Picker("", selection: primaryTargetLanguageBinding) {
+                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                    Text("\(lang.flag) \(lang.rawValue)").tag(lang)
+                }
             }
-
-            Text("Code → translates comments only. Errors → translates + explains.")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.25))
-                .padding(.top, 4)
-                .padding(.leading, 28)
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
         }
+        hint("Text is translated to this language by default.")
+        rowDivider
+        row(icon: "arrow.uturn.left", title: "Fallback language") {
+            Picker("", selection: secondaryTargetLanguageBinding) {
+                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                    Text("\(lang.flag) \(lang.rawValue)").tag(lang)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+        hint("Used when the text is already in your primary language.")
+        rowDivider
+        row(icon: "sparkles", title: "Smart mode") {
+            Toggle("", isOn: smartModeBinding)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(.blue)
+        }
+        hint("Code → translates comments only. Errors → translates + explains.")
     }
 
     // MARK: - API
 
-    private var apiSection: some View {
-        card {
-            // API Key
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "key.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .frame(width: 16)
-                    Text("API Key")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-
-                HStack(spacing: 8) {
-                    ZStack {
-                        if isAPIKeyVisible {
-                            TextField("sk-ant-...", text: $apiKeyInput)
-                                .textFieldStyle(.plain)
-                        } else {
-                            SecureField("sk-ant-...", text: $apiKeyInput)
-                                .textFieldStyle(.plain)
-                        }
-                    }
-                    .font(.system(size: 12, design: .monospaced))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(.white.opacity(0.04))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
-                    )
-
-                    iconButton(isAPIKeyVisible ? "eye.slash.fill" : "eye.fill") {
-                        isAPIKeyVisible.toggle()
-                    }
-                }
+    @ViewBuilder
+    private var apiRows: some View {
+        // API Key label + input
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(VoxTokens.Ink.subtle)
+                    .frame(width: 16)
+                Text("API Key")
+                    .font(VoxTokens.Typo.body)
+                    .foregroundStyle(VoxTokens.Ink.secondary)
             }
 
-            divider
-
-            // Model
-            row(icon: "cpu", title: "Model") {
-                Picker("", selection: selectedModelBinding) {
-                    ForEach(ClaudeModel.allCases) { model in
-                        Text(model.displayName).tag(model)
+            HStack(spacing: 8) {
+                Group {
+                    if isAPIKeyVisible {
+                        TextField("sk-ant-...", text: $apiKeyInput)
+                            .textFieldStyle(.plain)
+                    } else {
+                        SecureField("sk-ant-...", text: $apiKeyInput)
+                            .textFieldStyle(.plain)
                     }
                 }
-                .pickerStyle(.menu)
-                .frame(width: 145)
-                .tint(.white.opacity(0.7))
-            }
+                .font(VoxTokens.Typo.mono)
+                .foregroundStyle(VoxTokens.Ink.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: VoxTokens.Radius.sm, style: .continuous)
+                        .fill(VoxTokens.Ink.floor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: VoxTokens.Radius.sm, style: .continuous)
+                        .strokeBorder(VoxTokens.Ink.trace, lineWidth: 0.5)
+                )
 
-            divider
-
-            // Save button
-            HStack {
-                verificationBadge
-                Spacer()
-                saveButton
+                VoxCircleIconButton(
+                    icon: isAPIKeyVisible ? "eye.slash.fill" : "eye.fill",
+                    size: 30
+                ) {
+                    isAPIKeyVisible.toggle()
+                }
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+
+        rowDivider
+
+        row(icon: "cpu", title: "Model") {
+            Picker("", selection: selectedModelBinding) {
+                ForEach(ClaudeModel.allCases) { model in
+                    Text(model.displayName).tag(model)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+
+        rowDivider
+
+        HStack(spacing: 10) {
+            verificationBadge
+            Spacer()
+            saveButton
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
+
+    // MARK: - About
+
+    @ViewBuilder
+    private var aboutRows: some View {
+        row(icon: "info.circle", title: "Version") {
+            Text("1.0.0")
+                .font(VoxTokens.Typo.mono)
+                .foregroundStyle(VoxTokens.Ink.subtle)
+        }
+    }
+
+    // MARK: - Shared row / hint / divider
+
+    private func row<Trailing: View>(
+        icon: String,
+        title: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(VoxTokens.Ink.subtle)
+                .frame(width: 16)
+            Text(title)
+                .font(VoxTokens.Typo.body)
+                .foregroundStyle(VoxTokens.Ink.secondary)
+            Spacer()
+            trailing()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(VoxTokens.Ink.faint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14 + 16 + 8) // align under title
+            .padding(.bottom, 6)
+    }
+
+    private var rowDivider: some View {
+        GradientDivider()
+            .padding(.horizontal, 14)
+    }
+
+    // MARK: - Verification Badge & Save Button
 
     private var verificationBadge: some View {
         Group {
@@ -299,8 +355,10 @@ struct SettingsView: View {
                 EmptyView()
             case .verifying:
                 HStack(spacing: 6) {
-                    ProgressView().controlSize(.small).tint(.white.opacity(0.5))
-                    Text("Checking...").font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+                    ProgressView().controlSize(.small).tint(VoxTokens.Ink.muted)
+                    Text("Checking...")
+                        .font(.system(size: 11))
+                        .foregroundStyle(VoxTokens.Ink.subtle)
                 }
             case .success:
                 HStack(spacing: 4) {
@@ -309,7 +367,7 @@ struct SettingsView: View {
                     Text("Verified")
                         .foregroundStyle(.green)
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(VoxTokens.Typo.small)
             case .failed(let msg):
                 HStack(spacing: 4) {
                     Image(systemName: "xmark.circle.fill")
@@ -317,100 +375,32 @@ struct SettingsView: View {
                     Text(msg)
                         .foregroundStyle(.red.opacity(0.8))
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(VoxTokens.Typo.small)
             }
         }
     }
 
+    /// Capsule Save button matching the lecture window's bottom-bar pill style.
     private var saveButton: some View {
-        Button(action: saveAndVerifyKey) {
-            HStack(spacing: 5) {
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 11))
-                Text("Save & Verify")
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: apiKeyInput.isEmpty
-                                ? [.gray.opacity(0.3), .gray.opacity(0.2)]
-                                : [.blue, .blue.opacity(0.7)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-            )
-            .shadow(color: apiKeyInput.isEmpty ? .clear : .blue.opacity(0.3), radius: 8, y: 2)
-        }
-        .buttonStyle(.plain)
-        .disabled(apiKeyInput.isEmpty)
-    }
-
-    // MARK: - About
-
-    private var aboutSection: some View {
-        card {
-            row(icon: "info.circle", title: "Version") {
-                Text("1.0.0")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.35))
-            }
-        }
-    }
-
-    // MARK: - Reusable Components
-
-    private func card(@ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            content()
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.white.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.06), lineWidth: 0.5)
+        VoxCapsuleButton(
+            "Save & Verify",
+            icon: "checkmark.shield.fill",
+            isDisabled: apiKeyInput.isEmpty,
+            action: saveAndVerifyKey
         )
     }
 
-    private func row(icon: String, title: String, @ViewBuilder trailing: () -> some View) -> some View {
-        HStack {
-            Image(systemName: icon)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.35))
-                .frame(width: 16)
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.8))
-            Spacer()
-            trailing()
-        }
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(.white.opacity(0.04))
-            .frame(height: 1)
-            .padding(.vertical, 2)
-    }
+    // MARK: - KeyCap
 
     private func keyCap(_ key: String) -> some View {
         Text(key)
             .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.7))
+            .foregroundStyle(VoxTokens.Ink.tertiary)
             .frame(minWidth: 24, minHeight: 22)
             .padding(.horizontal, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.white.opacity(0.08))
+                    .fill(VoxTokens.Ink.trace)
                     .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
             )
             .overlay(
@@ -424,24 +414,6 @@ struct SettingsView: View {
                         lineWidth: 0.5
                     )
             )
-    }
-
-    private func iconButton(_ systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.35))
-                .frame(width: 30, height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(.white.opacity(0.04))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(.white.opacity(0.06), lineWidth: 0.5)
-                )
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Actions

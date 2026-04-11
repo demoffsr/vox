@@ -35,16 +35,9 @@ final class CinemaInputPanel: NSPanel {
             defer: false
         )
 
-        isFloatingPanel = true
-        level = .floating
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = true
+        VoxPanelChrome.applyBaseConfiguration(self)
         isMovableByWindowBackground = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         animationBehavior = .none
-        hidesOnDeactivate = false
-        becomesKeyOnlyIfNeeded = true
         isReleasedWhenClosed = false
         ignoresMouseEvents = false
     }
@@ -53,7 +46,7 @@ final class CinemaInputPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     func showAnimated() {
-        let hostingView = NSHostingView(rootView: CinemaInputView(
+        let cinemaView = CinemaInputView(
             onSubmit: { [weak self] showName in
                 self?.dismissAnimated()
                 self?.onSubmit?(showName)
@@ -62,8 +55,8 @@ final class CinemaInputPanel: NSPanel {
                 self?.dismissAnimated()
                 self?.onSkip?()
             }
-        ))
-        contentView = hostingView
+        )
+        VoxPanelChrome.embed(cinemaView, in: self)
 
         alphaValue = 0
         orderFrontRegardless()
@@ -117,9 +110,17 @@ struct CinemaInputView: View {
             TextField("What are you watching?", text: $showName)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(VoxTokens.Ink.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .background(
+                    RoundedRectangle(cornerRadius: VoxTokens.Radius.md, style: .continuous)
+                        .fill(VoxTokens.Ink.floor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: VoxTokens.Radius.md, style: .continuous)
+                        .strokeBorder(VoxTokens.Ink.hairline, lineWidth: 0.5)
+                )
                 .focused($isFocused)
                 .onSubmit {
                     let trimmed = showName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -129,14 +130,10 @@ struct CinemaInputView: View {
                 }
                 .onExitCommand { onSkip() }
 
-            Button(action: onSkip) {
-                Text("Skip")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
+            VoxCapsuleButton("Skip", action: onSkip)
         }
         .padding(20)
+        .environment(\.colorScheme, .dark)
         .scaleEffect(isShowing ? 1 : 0.5)
         .opacity(isShowing ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

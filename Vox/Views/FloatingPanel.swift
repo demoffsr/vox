@@ -14,47 +14,11 @@ final class FloatingPanel: NSPanel {
             defer: false
         )
 
-        isFloatingPanel = true
-        level = .floating
-        isOpaque = false
-        backgroundColor = NSColor.clear
-        hasShadow = true
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
+        VoxPanelChrome.applyBaseConfiguration(self)
         isMovableByWindowBackground = true
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         animationBehavior = .utilityWindow
-        hidesOnDeactivate = false
-        becomesKeyOnlyIfNeeded = true
 
-        // Glass background (like Spotlight)
-        let visualEffect = NSVisualEffectView()
-        visualEffect.material = .hudWindow
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 16
-        visualEffect.layer?.masksToBounds = true
-
-        // SwiftUI content on top of glass
-        let hosting = NSHostingView(rootView: AnyView(contentView))
-        hosting.wantsLayer = true
-        hosting.layer?.backgroundColor = CGColor.clear
-        if let layer = hosting.layer {
-            layer.isOpaque = false
-        }
-
-        visualEffect.addSubview(hosting)
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            hosting.topAnchor.constraint(equalTo: visualEffect.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
-            hosting.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
-        ])
-
-        self.contentView = visualEffect
-        self.hostingView = hosting
+        self.hostingView = VoxPanelChrome.embed(AnyView(contentView), in: self)
     }
 
     override var canBecomeKey: Bool { true }

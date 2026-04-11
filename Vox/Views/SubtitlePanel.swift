@@ -38,26 +38,26 @@ final class SubtitlePanel: NSPanel {
             defer: false
         )
 
-        isFloatingPanel = true
-        level = .floating
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = true
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
+        VoxPanelChrome.applyBaseConfiguration(self)
         isMovableByWindowBackground = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         animationBehavior = .none
-        hidesOnDeactivate = false
-        becomesKeyOnlyIfNeeded = true
-        ignoresMouseEvents = false
         alphaValue = 0
 
-        // Dark rounded background
-        let bg = NSView(frame: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 100))
+        // Two-layer background:
+        //   1) .hudWindow NSVisualEffectView — same glass base as lecture/card panels
+        //   2) dark overlay — keeps text readable on bright video frames
+        //
+        // Pure glass alone disappears on white/yellow scenes, so we retain a 0.55 black
+        // wash under the labels while gaining the glass edge of the rest of the app.
+        let visualEffect = VoxPanelChrome.makeGlassBackground(cornerRadius: 16)
+        visualEffect.frame = NSRect(x: 0, y: 0, width: Self.panelWidth, height: 100)
+
+        let bg = NSView()
         bg.wantsLayer = true
-        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.80).cgColor
-        bg.layer?.cornerRadius = 14
+        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        bg.layer?.cornerRadius = 16
+        bg.layer?.masksToBounds = true
         bg.layer?.borderWidth = 0.5
         bg.layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
 
@@ -96,13 +96,20 @@ final class SubtitlePanel: NSPanel {
 
         bg.addSubview(originalLabel)
         bg.addSubview(label)
-        self.contentView = bg
+        visualEffect.addSubview(bg)
+        self.contentView = visualEffect
 
-        // Layout
-        bg.autoresizingMask = [.width, .height]
+        // Layout: visualEffect resizes with panel, bg pinned to its edges, labels pinned to bg.
+        visualEffect.autoresizingMask = [.width, .height]
+        bg.translatesAutoresizingMaskIntoConstraints = false
         originalLabel.translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
+            bg.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
+            bg.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
+            bg.topAnchor.constraint(equalTo: visualEffect.topAnchor),
+            bg.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
+
             originalLabel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 24),
             originalLabel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -24),
             originalLabel.topAnchor.constraint(equalTo: bg.topAnchor, constant: 10),
