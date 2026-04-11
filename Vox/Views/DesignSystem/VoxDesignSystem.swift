@@ -80,16 +80,21 @@ nonisolated enum VoxTokens {
 /// Horizontal gradient hairline. Fades in/out from the edges so it doesn't cut the glass hard.
 /// Used as the section divider across every panel.
 struct GradientDivider: View {
+    var axis: Axis = .horizontal
+
     var body: some View {
         Rectangle()
             .fill(
                 LinearGradient(
                     colors: [.white.opacity(0), VoxTokens.Ink.hairline, .white.opacity(0)],
-                    startPoint: .leading,
-                    endPoint: .trailing
+                    startPoint: axis == .horizontal ? .leading : .top,
+                    endPoint:   axis == .horizontal ? .trailing : .bottom
                 )
             )
-            .frame(height: 1)
+            .frame(
+                width:  axis == .vertical   ? 1 : nil,
+                height: axis == .horizontal ? 1 : nil
+            )
     }
 }
 
