@@ -36,6 +36,17 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .about: "info.circle"
         }
     }
+
+    var color: Color {
+        switch self {
+        case .general: .blue
+        case .subtitles: .mint
+        case .translation: .green
+        case .history: .orange
+        case .api: .purple
+        case .about: .gray
+        }
+    }
 }
 
 /// Settings panel. Shares the lecture translation window's visual language:
@@ -142,7 +153,7 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 Image(systemName: category.icon)
                     .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? VoxTokens.Ink.primary : VoxTokens.Ink.subtle)
+                    .foregroundStyle(category.color)
                     .frame(width: 16)
                 Text(category.title)
                     .font(VoxTokens.Typo.body)
