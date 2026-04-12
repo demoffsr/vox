@@ -1,14 +1,14 @@
 import SwiftUI
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case general, subtitles, translation, history, api, about
+    case general, pointTranslation, liveTranslation, history, api, about
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .general: "General"
-        case .subtitles: "Subtitles"
-        case .translation: "Translation"
+        case .pointTranslation: "Point Translation"
+        case .liveTranslation: "Live Translation"
         case .history: "History"
         case .api: "API"
         case .about: "About"
@@ -18,10 +18,10 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .general: "App-wide behavior and keyboard shortcut."
-        case .subtitles: "Live subtitles for lectures, videos, and Safari."
-        case .translation: "Default target languages and Smart Mode rules."
+        case .pointTranslation: "Quick translate from clipboard with ⌘T."
+        case .liveTranslation: "Real-time subtitles, lecture and cinema translation."
         case .history: "Your past translations and lecture sessions."
-        case .api: "Claude API key, model selection, and connection check."
+        case .api: "Claude API key and connection."
         case .about: "Version and build information."
         }
     }
@@ -29,8 +29,8 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: "gear"
-        case .subtitles: "captions.bubble"
-        case .translation: "globe"
+        case .pointTranslation: "text.bubble"
+        case .liveTranslation: "captions.bubble"
         case .history: "clock.arrow.circlepath"
         case .api: "key.fill"
         case .about: "info.circle"
@@ -40,8 +40,8 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .general: .blue
-        case .subtitles: .mint
-        case .translation: .green
+        case .pointTranslation: .purple
+        case .liveTranslation: .mint
         case .history: .orange
         case .api: .purple
         case .about: .gray
@@ -87,12 +87,11 @@ struct SettingsView: View {
         Binding(get: { settings.showNativeSubtitles }, set: { settings.showNativeSubtitles = $0 })
     }
 
-    private var subtitleTranslationLanguageBinding: Binding<TargetLanguage?> {
-        Binding(get: { settings.subtitleTranslationLanguage }, set: { settings.subtitleTranslationLanguage = $0 })
-    }
-
-    private var subtitleTranslationModelBinding: Binding<ClaudeModel> {
-        Binding(get: { settings.subtitleTranslationModel }, set: { settings.subtitleTranslationModel = $0 })
+    private var defaultTranslationLanguageBinding: Binding<TargetLanguage> {
+        Binding(
+            get: { settings.subtitleTranslationLanguage ?? settings.primaryTargetLanguage },
+            set: { settings.subtitleTranslationLanguage = $0 }
+        )
     }
 
     private var primaryTargetLanguageBinding: Binding<TargetLanguage> {
@@ -106,41 +105,17 @@ struct SettingsView: View {
     // MARK: - Body
 
     var body: some View {
-        VStack(spacing: 0) {
-            titleBar
-            GradientDivider()
-
-            HStack(spacing: 0) {
-                sidebar
-                GradientDivider(axis: .vertical)
-                contentPane
-            }
+        HStack(spacing: 0) {
+            sidebar
+            GradientDivider(axis: .vertical)
+            contentPane
         }
+        .padding(.top, 28) // room for the transparent traffic-light titlebar
         .frame(width: 660, height: 600)
         .environment(\.colorScheme, .dark)
         .onAppear {
             apiKeyInput = (try? keychainHelper.load()) ?? ""
         }
-    }
-
-    // MARK: - Title Bar  (mirrors TranslationStreamView.titleBar rhythm)
-
-    private var titleBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "bubble.left.fill")
-                .font(.system(size: 13))
-                .foregroundStyle(VoxTokens.Ink.muted)
-            Text("Settings")
-                .font(VoxTokens.Typo.body)
-                .foregroundStyle(VoxTokens.Ink.primary)
-            Spacer()
-            Text("Vox")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(VoxTokens.Ink.faint)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .padding(.top, 18) // leave room for the transparent traffic-light titlebar
     }
 
     // MARK: - Sidebar
@@ -186,7 +161,7 @@ struct SettingsView: View {
         .padding(.horizontal, 10)
         .padding(.top, 14)
         .padding(.bottom, 14)
-        .frame(width: 180, alignment: .top)
+        .frame(width: 200, alignment: .top)
     }
 
     // MARK: - Content Header
@@ -217,19 +192,19 @@ struct SettingsView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     switch selected {
-                    case .general:     generalRows
-                    case .subtitles:   subtitlesRows
-                    case .translation: translationRows
-                    case .history:     HistorySectionView()
-                    case .api:         apiRows
-                    case .about:       aboutRows
+                    case .general:          generalRows
+                    case .pointTranslation: pointTranslationRows
+                    case .liveTranslation:  liveTranslationRows
+                    case .history:          HistorySectionView()
+                    case .api:              apiRows
+                    case .about:            aboutRows
                     }
                 }
                 .padding(.top, 4)
                 .padding(.bottom, 14)
             }
         }
-        .frame(width: 479)
+        .frame(width: 459)
     }
 
     // MARK: - General
@@ -251,59 +226,18 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Subtitles
+    // MARK: - Point Translation
 
     @ViewBuilder
-    private var subtitlesRows: some View {
-        row(icon: "captions.bubble", title: "Language") {
-            Picker("", selection: subtitleLanguageBinding) {
-                ForEach(SubtitleLanguage.allCases) { lang in
-                    Text("\(lang.flag) \(lang.displayName)").tag(lang)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 145)
-            .tint(VoxTokens.Ink.tertiary)
-        }
-        rowDivider
-        row(icon: "rectangle.bottomhalf.inset.filled", title: "Overlay panel") {
-            Toggle("", isOn: showNativeSubtitlesBinding)
+    private var pointTranslationRows: some View {
+        row(icon: "sparkles", title: "Smart mode") {
+            Toggle("", isOn: smartModeBinding)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .tint(.blue)
         }
-        hint("Show floating subtitles over any app. Safari overlay always active.")
+        hint("Code → translates comments only. Errors → translates + explains.")
         rowDivider
-        row(icon: "character.bubble", title: "Translate to") {
-            Picker("", selection: subtitleTranslationLanguageBinding) {
-                Text("Off").tag(TargetLanguage?.none)
-                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
-                    Text("\(lang.flag) \(lang.rawValue)").tag(Optional(lang))
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 145)
-            .tint(VoxTokens.Ink.tertiary)
-        }
-        hint("Live translation via Claude API (streaming). Requires API key.")
-        rowDivider
-        row(icon: "cpu", title: "Subtitle model") {
-            Picker("", selection: subtitleTranslationModelBinding) {
-                ForEach(ClaudeModel.allCases) { model in
-                    Text(model.displayName).tag(model)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 145)
-            .tint(VoxTokens.Ink.tertiary)
-        }
-        hint("Haiku is fast and cheap. Sonnet is slower but translates better.")
-    }
-
-    // MARK: - Translation
-
-    @ViewBuilder
-    private var translationRows: some View {
         row(icon: "globe", title: "Primary language") {
             Picker("", selection: primaryTargetLanguageBinding) {
                 ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
@@ -328,13 +262,54 @@ struct SettingsView: View {
         }
         hint("Used when the text is already in your primary language.")
         rowDivider
-        row(icon: "sparkles", title: "Smart mode") {
-            Toggle("", isOn: smartModeBinding)
+        row(icon: "cpu", title: "Model") {
+            Picker("", selection: selectedModelBinding) {
+                ForEach(ClaudeModel.allCases) { model in
+                    Text(model.displayName).tag(model)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+        hint("Haiku is fast and cheap. Sonnet is slower but more accurate.")
+    }
+
+    // MARK: - Live Translation
+
+    @ViewBuilder
+    private var liveTranslationRows: some View {
+        row(icon: "rectangle.bottomhalf.inset.filled", title: "Overlay panel") {
+            Toggle("", isOn: showNativeSubtitlesBinding)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .tint(.blue)
         }
-        hint("Code → translates comments only. Errors → translates + explains.")
+        hint("Show floating subtitles over any app. Safari overlay always active.")
+        rowDivider
+        row(icon: "waveform", title: "Source language") {
+            Picker("", selection: subtitleLanguageBinding) {
+                ForEach(SubtitleLanguage.allCases) { lang in
+                    Text("\(lang.flag) \(lang.displayName)").tag(lang)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+        hint("Language being spoken in the audio source.")
+        rowDivider
+        row(icon: "character.bubble", title: "Translate to") {
+            Picker("", selection: defaultTranslationLanguageBinding) {
+                ForEach(TargetLanguage.allCases.filter { $0 != .auto }) { lang in
+                    Text("\(lang.flag) \(lang.rawValue)").tag(lang)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 145)
+            .tint(VoxTokens.Ink.tertiary)
+        }
+        hint("Default target for Lecture and Cinema modes. Can be changed live.")
     }
 
     // MARK: - API
@@ -386,19 +361,6 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-
-        rowDivider
-
-        row(icon: "cpu", title: "Model") {
-            Picker("", selection: selectedModelBinding) {
-                ForEach(ClaudeModel.allCases) { model in
-                    Text(model.displayName).tag(model)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 145)
-            .tint(VoxTokens.Ink.tertiary)
-        }
 
         rowDivider
 
