@@ -15,7 +15,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    var description: String {
+    var subtitle: String {
         switch self {
         case .general: "App-wide behavior and keyboard shortcut."
         case .subtitles: "Live subtitles for lectures, videos, and Safari."
@@ -185,7 +185,7 @@ struct SettingsView: View {
             Text(category.title)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(VoxTokens.Ink.primary)
-            Text(category.description)
+            Text(category.subtitle)
                 .font(.system(size: 11))
                 .foregroundStyle(VoxTokens.Ink.faint)
         }
