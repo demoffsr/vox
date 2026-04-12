@@ -1,5 +1,43 @@
 import SwiftUI
 
+private enum SettingsCategory: String, CaseIterable, Identifiable {
+    case general, subtitles, translation, history, api, about
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .subtitles: "Subtitles"
+        case .translation: "Translation"
+        case .history: "History"
+        case .api: "API"
+        case .about: "About"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .general: "App-wide behavior and keyboard shortcut."
+        case .subtitles: "Live subtitles for lectures, videos, and Safari."
+        case .translation: "Default target languages and Smart Mode rules."
+        case .history: "Your past translations and lecture sessions."
+        case .api: "Claude API key, model selection, and connection check."
+        case .about: "Version and build information."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general: "gear"
+        case .subtitles: "captions.bubble"
+        case .translation: "globe"
+        case .history: "clock.arrow.circlepath"
+        case .api: "key.fill"
+        case .about: "info.circle"
+        }
+    }
+}
+
 /// Settings panel. Shares the lecture translation window's visual language:
 /// compact title bar, gradient dividers between sections, single flat surface
 /// (no nested cards), capsule pill buttons.
@@ -8,6 +46,7 @@ struct SettingsView: View {
     @State private var apiKeyInput: String = ""
     @State private var isAPIKeyVisible: Bool = false
     @State private var verificationStatus: VerificationStatus = .idle
+    @State private var selected: SettingsCategory = .general
 
     private let keychainHelper = KeychainHelper()
 
@@ -60,27 +99,13 @@ struct SettingsView: View {
             titleBar
             GradientDivider()
 
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    sectionHeader("General")
-                    generalRows
-
-                    sectionHeader("Subtitles")
-                    subtitlesRows
-
-                    sectionHeader("Translation")
-                    translationRows
-
-                    sectionHeader("API")
-                    apiRows
-
-                    sectionHeader("About")
-                    aboutRows
-                }
-                .padding(.bottom, 14)
+            HStack(spacing: 0) {
+                sidebar
+                GradientDivider(axis: .vertical)
+                contentPane
             }
         }
-        .frame(width: 480, height: 600)
+        .frame(width: 660, height: 600)
         .environment(\.colorScheme, .dark)
         .onAppear {
             apiKeyInput = (try? keychainHelper.load()) ?? ""
@@ -107,17 +132,93 @@ struct SettingsView: View {
         .padding(.top, 18) // leave room for the transparent traffic-light titlebar
     }
 
-    // MARK: - Section Header
+    // MARK: - Sidebar
 
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(VoxTokens.Ink.faint)
-            .tracking(0.6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.top, 18)
-            .padding(.bottom, 8)
+    private func sidebarItem(_ category: SettingsCategory) -> some View {
+        let isSelected = selected == category
+        return Button {
+            selected = category
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: category.icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? VoxTokens.Ink.primary : VoxTokens.Ink.subtle)
+                    .frame(width: 16)
+                Text(category.title)
+                    .font(VoxTokens.Typo.body)
+                    .foregroundStyle(isSelected ? VoxTokens.Ink.primary : VoxTokens.Ink.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.08) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(isSelected ? Color.white.opacity(0.06) : Color.clear, lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(SettingsCategory.allCases) { category in
+                sidebarItem(category)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 14)
+        .padding(.bottom, 14)
+        .frame(width: 180, alignment: .top)
+    }
+
+    // MARK: - Content Header
+
+    private func contentHeader(_ category: SettingsCategory) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(category.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(VoxTokens.Ink.primary)
+            Text(category.description)
+                .font(.system(size: 11))
+                .foregroundStyle(VoxTokens.Ink.faint)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
+    }
+
+    // MARK: - Content Pane
+
+    @ViewBuilder
+    private var contentPane: some View {
+        VStack(spacing: 0) {
+            contentHeader(selected)
+            GradientDivider().padding(.horizontal, 14)
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    switch selected {
+                    case .general:     generalRows
+                    case .subtitles:   subtitlesRows
+                    case .translation: translationRows
+                    case .history:     HistorySectionView()
+                    case .api:         apiRows
+                    case .about:       aboutRows
+                    }
+                }
+                .padding(.top, 4)
+                .padding(.bottom, 14)
+            }
+        }
+        .frame(width: 479)
     }
 
     // MARK: - General

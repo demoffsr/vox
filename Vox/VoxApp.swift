@@ -1,8 +1,10 @@
 import SwiftUI
+import SwiftData
 import Speech
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let historyStore = HistoryStore()
     let coordinator = AppCoordinator()
     let subtitleService = SubtitleService()
     private var settingsWindow: NSWindow?
@@ -17,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         coordinator.subtitleService = subtitleService
+        coordinator.viewModel.historyStore = historyStore
+        subtitleService.historyStore = historyStore
 
         Task { await refreshInstalledLocales() }
         // Register this object as the Services provider
@@ -63,11 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let settingsView = SettingsView()
+            .modelContainer(historyStore.container)
         // Use a .titled window with fullSizeContentView so the system close button stays
         // intact while the content extends under a transparent titlebar, letting the
         // NSVisualEffectView glass show through the full window height.
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 600),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
