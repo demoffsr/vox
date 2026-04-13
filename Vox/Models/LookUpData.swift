@@ -125,6 +125,14 @@ struct LookUpResponse: Codable {
     let context: Context?
     let imageSearchQuery: String?
 
+    // Resilient decoding — if one section is malformed, others still parse
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dictionary = try? container.decode(Dictionary.self, forKey: .dictionary)
+        context = try? container.decode(Context.self, forKey: .context)
+        imageSearchQuery = try? container.decode(String.self, forKey: .imageSearchQuery)
+    }
+
     func toLookUpData() -> LookUpData {
         LookUpData(
             dictionary: dictionary.map {

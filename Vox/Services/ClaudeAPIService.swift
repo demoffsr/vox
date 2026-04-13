@@ -79,7 +79,8 @@ final class ClaudeAPIService {
     static func buildLookUpRequest(
         text: String,
         targetLanguage: TargetLanguage,
-        apiKey: String
+        apiKey: String,
+        model: ClaudeModel = .sonnet
     ) throws -> URLRequest {
         var request = URLRequest(url: Constants.apiURL)
         request.httpMethod = "POST"
@@ -88,7 +89,7 @@ final class ClaudeAPIService {
         request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
 
         let body: [String: Any] = [
-            "model": ClaudeModel.sonnet.rawValue,
+            "model": model.rawValue,
             "max_tokens": 1024,
             "stream": false,
             "temperature": 0.3,
@@ -110,27 +111,35 @@ final class ClaudeAPIService {
             text: text, targetLanguage: targetLanguage, apiKey: apiKey
         )
 
-        // Retry on transient errors (429, 529) up to 2 times
-        var lastStatusCode = 0
-        for attempt in 0..<3 {
+        // Try Sonnet first, then retry once. On persistent 429/529, fall back to Haiku.
+        for attempt in 0..<2 {
             if attempt > 0 {
-                try await Task.sleep(for: .milliseconds(500 * attempt))
+                try await Task.sleep(for: .seconds(1.5))
             }
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw APIError.invalidResponse(0)
             }
-            lastStatusCode = http.statusCode
-            if http.statusCode == 429 || http.statusCode == 529 {
-                continue
-            }
+            if http.statusCode == 429 || http.statusCode == 529 { continue }
             if http.statusCode == 401 { throw APIError.invalidAPIKey }
             if http.statusCode != 200 { throw APIError.invalidResponse(http.statusCode) }
-
-            // Success — parse response
             return try Self.parseLookUpResponse(data: data)
         }
-        throw lastStatusCode == 429 ? APIError.rateLimited : APIError.invalidResponse(lastStatusCode)
+
+        // Fallback to Haiku
+        print("[LookUp] Sonnet unavailable, falling back to Haiku")
+        let fallbackRequest = try Self.buildLookUpRequest(
+            text: text, targetLanguage: targetLanguage, apiKey: apiKey,
+            model: .haiku
+        )
+        let (data, response) = try await URLSession.shared.data(for: fallbackRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse(0)
+        }
+        if http.statusCode == 401 { throw APIError.invalidAPIKey }
+        if http.statusCode == 429 { throw APIError.rateLimited }
+        if http.statusCode != 200 { throw APIError.invalidResponse(http.statusCode) }
+        return try Self.parseLookUpResponse(data: data)
     }
 
     private static func parseLookUpResponse(data: Data) throws -> LookUpData {
@@ -150,8 +159,17 @@ final class ClaudeAPIService {
 
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let parsed = try decoder.decode(LookUpResponse.self, from: jsonData)
-        return parsed.toLookUpData()
+        do {
+            let parsed = try decoder.decode(LookUpResponse.self, from: jsonData)
+            let result = parsed.toLookUpData()
+            if result.dictionary == nil && result.context == nil {
+                print("[LookUp] Warning: parsed OK but dictionary & context are both nil. Raw JSON:\n\(cleanedJSON.prefix(500))")
+            }
+            return result
+        } catch {
+            print("[LookUp] Decode error: \(error)\nRaw JSON:\n\(cleanedJSON.prefix(500))")
+            throw error
+        }
     }
 
     func translate(
