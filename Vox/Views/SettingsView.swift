@@ -1,13 +1,13 @@
 import SwiftUI
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case general, pointTranslation, liveTranslation, history, api, about
+    case general, quickTranslation, liveTranslation, history, api, about
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .general: "General"
-        case .pointTranslation: "Point Translation"
+        case .quickTranslation: "Quick Translation"
         case .liveTranslation: "Live Translation"
         case .history: "History"
         case .api: "API"
@@ -18,7 +18,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .general: "App-wide behavior and keyboard shortcut."
-        case .pointTranslation: "Quick translate from clipboard with ⌘T."
+        case .quickTranslation: "Quick translate from clipboard with ⌘T."
         case .liveTranslation: "Real-time subtitles, lecture and cinema translation."
         case .history: "Your past translations and lecture sessions."
         case .api: "Claude API key and connection."
@@ -29,7 +29,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: "gear"
-        case .pointTranslation: "text.bubble"
+        case .quickTranslation: "text.bubble"
         case .liveTranslation: "captions.bubble"
         case .history: "clock.arrow.circlepath"
         case .api: "key.fill"
@@ -40,7 +40,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .general: .blue
-        case .pointTranslation: .purple
+        case .quickTranslation: .purple
         case .liveTranslation: .mint
         case .history: .orange
         case .api: .purple
@@ -193,7 +193,7 @@ struct SettingsView: View {
                 VStack(spacing: 0) {
                     switch selected {
                     case .general:          generalRows
-                    case .pointTranslation: pointTranslationRows
+                    case .quickTranslation: quickTranslationRows
                     case .liveTranslation:  liveTranslationRows
                     case .history:          HistorySectionView()
                     case .api:              apiRows
@@ -226,17 +226,17 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Point Translation
+    // MARK: - Quick Translation
 
     @ViewBuilder
-    private var pointTranslationRows: some View {
+    private var quickTranslationRows: some View {
         row(icon: "sparkles", title: "Smart mode") {
             Toggle("", isOn: smartModeBinding)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .tint(.blue)
         }
-        hint("Code → translates comments only. Errors → translates + explains.")
+        hint("Adds dictionary definitions, usage examples, and cultural notes alongside translation.")
         rowDivider
         row(icon: "globe", title: "Primary language") {
             Picker("", selection: primaryTargetLanguageBinding) {

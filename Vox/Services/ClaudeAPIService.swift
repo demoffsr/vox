@@ -33,11 +33,33 @@ final class ClaudeAPIService {
             "temperature": 0.2,
             "system": Constants.systemPrompt(targetLanguage: targetLanguage),
             "messages": [
-                ["role": "user", "content": text]
+                ["role": "user", "content": "<text>\n\(text)\n</text>"],
+                ["role": "assistant", "content": "<translation>"]
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
+    }
+
+    /// Strips markdown code fences and extracts the JSON object from LLM output.
+    static func extractJSON(from text: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Remove markdown code fences (```json ... ``` or ``` ... ```)
+        if cleaned.hasPrefix("```") {
+            if let firstNewline = cleaned.firstIndex(of: "\n") {
+                cleaned = String(cleaned[cleaned.index(after: firstNewline)...])
+            }
+            if cleaned.hasSuffix("```") {
+                cleaned = String(cleaned.dropLast(3))
+            }
+            cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Find JSON object boundaries as a fallback
+        if let start = cleaned.firstIndex(of: "{"),
+           let end = cleaned.lastIndex(of: "}") {
+            cleaned = String(cleaned[start...end])
+        }
+        return cleaned
     }
 
     static func parseSSELine(_ line: String) -> String? {
@@ -52,6 +74,84 @@ final class ClaudeAPIService {
             return nil
         }
         return text
+    }
+
+    static func buildLookUpRequest(
+        text: String,
+        targetLanguage: TargetLanguage,
+        apiKey: String
+    ) throws -> URLRequest {
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.sonnet.rawValue,
+            "max_tokens": 1024,
+            "stream": false,
+            "temperature": 0.3,
+            "system": Constants.lookUpPrompt(targetLanguage: targetLanguage),
+            "messages": [
+                ["role": "user", "content": "<text>\n\(text)\n</text>"]
+            ]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    func lookUp(
+        text: String,
+        targetLanguage: TargetLanguage,
+        apiKey: String
+    ) async throws -> LookUpData {
+        let request = try Self.buildLookUpRequest(
+            text: text, targetLanguage: targetLanguage, apiKey: apiKey
+        )
+
+        // Retry on transient errors (429, 529) up to 2 times
+        var lastStatusCode = 0
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try await Task.sleep(for: .milliseconds(500 * attempt))
+            }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse(0)
+            }
+            lastStatusCode = http.statusCode
+            if http.statusCode == 429 || http.statusCode == 529 {
+                continue
+            }
+            if http.statusCode == 401 { throw APIError.invalidAPIKey }
+            if http.statusCode != 200 { throw APIError.invalidResponse(http.statusCode) }
+
+            // Success — parse response
+            return try Self.parseLookUpResponse(data: data)
+        }
+        throw lastStatusCode == 429 ? APIError.rateLimited : APIError.invalidResponse(lastStatusCode)
+    }
+
+    private static func parseLookUpResponse(data: Data) throws -> LookUpData {
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = json["content"] as? [[String: Any]],
+              let first = content.first,
+              let textContent = first["text"] as? String
+        else {
+            throw APIError.invalidResponse(200)
+        }
+
+        let cleanedJSON = Self.extractJSON(from: textContent)
+        guard let jsonData = cleanedJSON.data(using: .utf8) else {
+            throw APIError.invalidResponse(200)
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let parsed = try decoder.decode(LookUpResponse.self, from: jsonData)
+        return parsed.toLookUpData()
     }
 
     func translate(

@@ -36,15 +36,16 @@ enum Constants {
         }
 
         return """
-        /* prompt redacted */ Translate the following text.
+        /* prompt redacted */ \
+         \
+        
 
-        Rules:
         \(langInstruction)
         - 
         - 
         - 
         - 
-        - Return ONLY the translation, no explanations or preamble
+        - 
         """
     }
 
@@ -104,6 +105,61 @@ enum Constants {
         "\u{FF01}", // fullwidth !
         "\u{FF1F}", // fullwidth ?
     ]
+
+    static func lookUpPrompt(targetLanguage: TargetLanguage) -> String {
+        let lang = targetLanguage.displayName
+        return """
+        /* prompt redacted */ \
+         \
+         \
+         \(lang).
+
+        
+        {
+          "dictionary": {
+            "partOfSpeech": "noun/verb/adjective/phrase/idiom/sentence",
+            "pronunciation": "IPA or transliteration, or null",
+            "entries": [
+              {
+                "meaning": "concise meaning in \(lang)",
+                "example": "example sentence in source language using the word",
+                "exampleTranslation": "same sentence translated to \(lang)"
+              }
+            ]
+          },
+          "context": {
+            "synonyms": [
+              { "word": "alternative translation in \(lang)", "note": "style or register hint in \(lang)" }
+            ],
+            "register": "neutral/formal/informal/slang",
+            "collocations": ["common phrase 1", "common phrase 2"],
+            "falseFriends": [
+              { "word": "similar-sounding word", "meaning": "what it actually means in \(lang)" }
+            ],
+            "notes": ["usage note or cultural context in \(lang)"]
+          },
+          "imageSearchQuery": "short English search query for images, or null"
+        }
+
+        Rules:
+        - . Each with a concise meaning in \(lang), \
+        plus an example sentence in the source language and its translation.
+        -  or commonly mispronounced words. null otherwise.
+        -  in \(lang), each with a brief \
+        register/style note (e.g. "поэтический", "разговорный", "технический").
+        -  of the input text.
+        -  or word combinations using this word (in source language).
+        -  that mean something different. Empty array if none.
+        -  in \(lang). Mention domain-specific usage if relevant.
+        -  for image search. \
+        ALWAYS provide a non-null query for any noun, noun phrase, or visually representable concept. \
+        Return null ONLY for abstract verbs, adjectives, or generic full sentences with no visual subject.
+        - For single words: rich dictionary entries + many synonyms + collocations.
+        - For phrases/idioms: dictionary explains the figurative meaning, context explains origin and equivalents.
+        - For full sentences: minimal dictionary (1 entry summarizing gist), context focuses on tone and register.
+        - 
+        """
+    }
 }
 
 enum ClaudeModel: String, CaseIterable, Identifiable {

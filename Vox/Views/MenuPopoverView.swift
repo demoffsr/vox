@@ -6,6 +6,7 @@ struct MenuPopoverView: View {
     let refreshLocales: () async -> Void
     let openSettings: () -> Void
 
+    @State private var isSmartMode = false
     @State private var isSubtitlesOn = false
     @State private var isTranslationOn = false
     @State private var listenLang: SubtitleLanguage = .english
@@ -21,7 +22,7 @@ struct MenuPopoverView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(VoxTokens.Ink.muted)
                         .frame(width: 18)
-                    Text("Translate")
+                    Text("Look Up")
                         .font(VoxTokens.Typo.body)
                         .foregroundStyle(VoxTokens.Ink.primary)
                     Spacer()
@@ -35,6 +36,24 @@ struct MenuPopoverView: View {
             }
             .buttonStyle(.plain)
 
+            // Smart Mode toggle
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundStyle(VoxTokens.Ink.subtle)
+                    .frame(width: 18)
+                Text("Smart Mode")
+                    .font(VoxTokens.Typo.body)
+                    .foregroundStyle(VoxTokens.Ink.primary)
+                Spacer()
+                Toggle("", isOn: smartModeBinding)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(.purple)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+
             GradientDivider()
 
             // Subtitles toggle
@@ -43,7 +62,7 @@ struct MenuPopoverView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(VoxTokens.Ink.subtle)
                     .frame(width: 18)
-                Text("Subtitles")
+                Text("Transcribe")
                     .font(VoxTokens.Typo.body)
                     .foregroundStyle(VoxTokens.Ink.primary)
                 Spacer()
@@ -67,7 +86,7 @@ struct MenuPopoverView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(VoxTokens.Ink.subtle)
                     .frame(width: 18)
-                Text("Translation")
+                Text("Study Mode")
                     .font(VoxTokens.Typo.body)
                     .foregroundStyle(VoxTokens.Ink.primary)
                 Spacer()
@@ -146,6 +165,7 @@ struct MenuPopoverView: View {
         .animation(.easeOut(duration: 0.2), value: isSubtitlesOn)
         .onAppear {
             // Safe sync — only updates @State, does NOT trigger Binding.set
+            isSmartMode = AppSettings.shared.smartModeEnabled
             isSubtitlesOn = subtitleService.isRunning
             isTranslationOn = AppSettings.shared.subtitleTranslationLanguage != nil
             listenLang = AppSettings.shared.subtitleLanguage
@@ -154,6 +174,16 @@ struct MenuPopoverView: View {
     }
 
     // MARK: - Bindings (actions fire ONLY on user interaction, never from onAppear)
+
+    private var smartModeBinding: Binding<Bool> {
+        Binding(
+            get: { isSmartMode },
+            set: { newValue in
+                isSmartMode = newValue
+                AppSettings.shared.smartModeEnabled = newValue
+            }
+        )
+    }
 
     private var subtitlesBinding: Binding<Bool> {
         Binding(
