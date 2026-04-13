@@ -97,11 +97,22 @@ function disableTranslation() {
     // Restore original text
     isApplyingTranslation = true;
     for (const [, batch] of nodeMap) {
-        (Array.isArray(batch) ? batch : [batch]).forEach(node => {
-            if (node._voxOriginal) { node.textContent = node._voxOriginal; delete node._voxOriginal; }
-            if (node.parentElement) {
-                node.parentElement.style.removeProperty("opacity");
-                node.parentElement.removeAttribute("data-vox-done");
+        (Array.isArray(batch) ? batch : [batch]).forEach(item => {
+            if (item._voxOriginal) {
+                if (item._voxIsBlock) {
+                    item.innerHTML = item._voxOriginal; // restore with inline formatting
+                } else {
+                    item.textContent = item._voxOriginal;
+                }
+                delete item._voxOriginal;
+                delete item._voxIsBlock;
+            }
+            if (item._voxIsBlock || item.nodeType === 1) {
+                item.style?.removeProperty("opacity");
+                item.removeAttribute?.("data-vox-done");
+            } else if (item.parentElement) {
+                item.parentElement.style.removeProperty("opacity");
+                item.parentElement.removeAttribute("data-vox-done");
             }
         });
     }
@@ -211,34 +222,110 @@ function collectTextNodes() {
 // ---- Translate ----
 
 const BATCH_SIZE = 30;
+const BLOCK_TAGS = new Set(["p","li","h1","h2","h3","h4","h5","h6","td","th","dd","dt","blockquote","figcaption","caption","summary","legend"]);
+
+// Collect block elements — translate whole paragraphs/headings/list items for full context
+function collectBlockElements() {
+    const blocks = [];
+    const seen = new WeakSet();
+    const all = document.body.querySelectorAll([...BLOCK_TAGS].join(","));
+    for (const el of all) {
+        if (seen.has(el) || el.hasAttribute("data-vox-done")) continue;
+        const text = el.textContent.trim();
+        if (text.length < 2) continue;
+        if (/^[\d\s.,;:!?%$€£¥+\-*/=()[\]{}@#&|<>]+$/.test(text)) continue;
+
+        // Skip elements inside excluded containers
+        let skip = false;
+        let ancestor = el.parentElement;
+        while (ancestor && ancestor !== document.body) {
+            const tag = ancestor.tagName.toLowerCase();
+            if (SKIP_TAGS.has(tag)) { skip = true; break; }
+            const cls = ancestor.className?.toString?.() || "";
+            if (/vjs|video-js|plyr|mejs|jw-/i.test(cls)) { skip = true; break; }
+            const role = ancestor.getAttribute("role") || "";
+            if (SKIP_ROLES.has(role)) { skip = true; break; }
+            ancestor = ancestor.parentElement;
+        }
+        if (skip) continue;
+
+        // Skip block elements that contain nested blocks (e.g. nav <li> with dropdown <ul>)
+        // — translating them as a unit would destroy the nested DOM structure
+        const nestedBlocks = el.querySelector("ul, ol, div, table, nav, section, article, aside, details");
+        if (nestedBlocks) continue;
+
+        seen.add(el);
+        blocks.push(el);
+    }
+    return blocks;
+}
+
+// Collect loose text nodes that aren't inside any block element we already collected
+function collectLooseTextNodes(blockElements) {
+    const blockSet = new WeakSet(blockElements);
+    const nodes = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let n;
+    while (n = walker.nextNode()) {
+        if (translatedNodes.has(n) || shouldSkip(n)) continue;
+        // Check if this node is inside a collected block element
+        let insideBlock = false;
+        let el = n.parentElement;
+        while (el && el !== document.body) {
+            if (blockSet.has(el)) { insideBlock = true; break; }
+            el = el.parentElement;
+        }
+        if (!insideBlock) nodes.push(n);
+    }
+    return nodes;
+}
 
 function translatePage(targetLanguage) {
     currentLanguage = targetLanguage || "Auto";
 
-    let textNodes = collectTextNodes();
-    console.log("[Vox content] Found text nodes:", textNodes.length);
-    if (!textNodes.length) return;
+    // Phase 1: block elements (paragraphs, headings, list items — full context)
+    const blocks = collectBlockElements();
+    // Phase 2: loose text nodes not inside any block (nav, buttons, labels)
+    const loose = collectLooseTextNodes(blocks);
+    // Merge: blocks first (as block items), then loose text nodes
+    let items = [...blocks.map(el => ({ el, isBlock: true })), ...loose.map(n => ({ el: n, isBlock: false }))];
 
-    // Check cache — apply matching, send rest to API
+    console.log("[Vox content] Found", blocks.length, "blocks +", loose.length, "loose text nodes");
+    if (!items.length) return;
+
+    // Sort: visible first, top-to-bottom
+    items.sort((a, b) => {
+        const aEl = a.isBlock ? a.el : a.el.parentElement;
+        const bEl = b.isBlock ? b.el : b.el.parentElement;
+        const ar = aEl?.getBoundingClientRect() || { width: 0, height: 0, top: 0 };
+        const br = bEl?.getBoundingClientRect() || { width: 0, height: 0, top: 0 };
+        const aVis = ar.width > 0 || ar.height > 0;
+        const bVis = br.width > 0 || br.height > 0;
+        if (aVis && !bVis) return -1;
+        if (!aVis && bVis) return 1;
+        return ar.top - br.top;
+    });
+
+    // Check cache
     const cache = loadTranslationCache();
     if (cache && cache.language === currentLanguage) {
         const cached = [];
         const uncached = [];
-        for (const node of textNodes) {
-            const orig = node.textContent.trim();
-            if (cache.translations[orig]) cached.push(node);
-            else uncached.push(node);
+        for (const item of items) {
+            const orig = item.el.textContent.trim();
+            if (cache.translations[orig]) cached.push(item);
+            else uncached.push(item);
         }
         if (cached.length > 0) {
             console.log("[Vox content] Cache: applying", cached.length, "cached,", uncached.length, "uncached");
-            applyCachedTranslations(cached, cache.translations);
+            applyCachedTranslations(cached.map(x => x.el), cache.translations);
             if (!uncached.length) return;
-            textNodes = uncached;
+            items = uncached;
         }
     }
 
     isTranslated = true;
-    const chunks = buildChunks(textNodes);
+    const chunks = buildChunks(items);
     console.log("[Vox content] Sending", chunks.length, "batches");
     browser.runtime.sendMessage({
         action: "translateChunks",
@@ -246,21 +333,76 @@ function translatePage(targetLanguage) {
     });
 }
 
-function buildChunks(textNodes) {
+function buildChunks(items) {
     const chunks = [];
-    for (let i = 0; i < textNodes.length; i += BATCH_SIZE) {
-        const batch = textNodes.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+        const batch = items.slice(i, i + BATCH_SIZE);
         const id = `vox-${nodeIdCounter++}`;
         const texts = [];
-        for (const node of batch) {
-            node._voxOriginal = node.textContent;
-            if (node.parentElement) node.parentElement.style.opacity = "0.5";
-            texts.push(node.textContent.trim());
+        const nodes = [];
+        for (const { el, isBlock } of batch) {
+            if (isBlock) {
+                el._voxOriginal = el.innerHTML;
+                el._voxIsBlock = true;
+            } else {
+                el._voxOriginal = el.textContent;
+            }
+            const target = isBlock ? el : el.parentElement;
+            if (target) target.style.opacity = "0.5";
+            texts.push(el.textContent.trim());
+            nodes.push(el);
         }
-        nodeMap.set(id, batch);
+        nodeMap.set(id, nodes);
         chunks.push({ id, text: JSON.stringify(texts) });
     }
     return chunks;
+}
+
+// ---- CJK spacing fix ----
+// CJK languages have no spaces between words. After translating to a space-using language,
+// adjacent text nodes can merge ("WikipediaWelcome to" instead of "Wikipedia Welcome to").
+const CJK_RE = /[\u2E80-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]/;
+
+function needsSpaceBefore(node) {
+    // Check if original text was CJK (no natural spaces)
+    if (!node._voxOriginal || !CJK_RE.test(node._voxOriginal)) return false;
+    // Walk backwards to find the previous visible text
+    let prev = node.previousSibling;
+    while (prev) {
+        if (prev.nodeType === 3) { // text node
+            const t = prev.textContent;
+            if (t.length > 0 && !/\s$/.test(t)) return true;
+            return false;
+        }
+        if (prev.nodeType === 1) { // element — check if inline
+            const display = getComputedStyle(prev).display;
+            if (display === "block" || display === "flex" || display === "grid") return false;
+            const t = prev.textContent;
+            if (t.length > 0 && !/\s$/.test(t)) return true;
+            return false;
+        }
+        prev = prev.previousSibling;
+    }
+    return false;
+}
+
+// Set translated text on a block element, preserving DOM structure when possible
+function setBlockText(el, text) {
+    // Collect text nodes inside the block
+    const textNodes = [];
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let tn;
+    while (tn = w.nextNode()) {
+        if (tn.textContent.trim().length > 0) textNodes.push(tn);
+    }
+    if (textNodes.length <= 1 && textNodes[0]) {
+        // Simple structure (e.g. <li><a>text</a></li>) — replace just the text node
+        // This preserves <a>, <span>, etc. wrappers and their styling
+        textNodes[0].textContent = text;
+    } else {
+        // Complex structure — replace entire content (loses inline formatting)
+        el.textContent = text;
+    }
 }
 
 // ---- Apply ----
@@ -282,17 +424,40 @@ function applyTranslation(msg) {
         }
 
         if (Array.isArray(parts)) {
-            batch.forEach((node, i) => {
-                if (i < parts.length && parts[i]) node.textContent = String(parts[i]);
-                if (node.parentElement) {
-                    node.parentElement.style.removeProperty("opacity");
-                    node.parentElement.setAttribute("data-vox-done", "1");
+            batch.forEach((item, i) => {
+                if (i < parts.length && parts[i]) {
+                    const text = String(parts[i]);
+                    if (item._voxIsBlock) {
+                        // Block element: smart replacement to preserve structure
+                        setBlockText(item, text);
+                    } else {
+                        // Text node: set with CJK space fix
+                        item.textContent = needsSpaceBefore(item) ? " " + text : text;
+                    }
                 }
-                translatedNodes.add(node);
+                if (item._voxIsBlock) {
+                    item.style.removeProperty("opacity");
+                    item.setAttribute("data-vox-done", "1");
+                } else if (item.parentElement) {
+                    item.parentElement.style.removeProperty("opacity");
+                    item.parentElement.setAttribute("data-vox-done", "1");
+                }
+                translatedNodes.add(item);
             });
         } else {
-            if (batch.length === 1) { batch[0].textContent = translation.trim(); translatedNodes.add(batch[0]); }
-            batch.forEach(n => { if (n.parentElement) n.parentElement.style.removeProperty("opacity"); });
+            if (batch.length === 1) {
+                const t = translation.trim();
+                if (batch[0]._voxIsBlock) {
+                    setBlockText(batch[0], t);
+                } else {
+                    batch[0].textContent = needsSpaceBefore(batch[0]) ? " " + t : t;
+                }
+                translatedNodes.add(batch[0]);
+            }
+            batch.forEach(item => {
+                if (item._voxIsBlock) item.style.removeProperty("opacity");
+                else if (item.parentElement) item.parentElement.style.removeProperty("opacity");
+            });
         }
     }
 
@@ -365,9 +530,13 @@ function saveTranslationCache() {
     const translations = (existing && existing.language === currentLanguage) ? { ...existing.translations } : {};
     let count = Object.keys(translations).length;
     for (const [, batch] of nodeMap) {
-        for (const node of (Array.isArray(batch) ? batch : [batch])) {
-            if (node._voxOriginal && node.textContent !== node._voxOriginal) {
-                translations[node._voxOriginal.trim()] = node.textContent;
+        for (const item of (Array.isArray(batch) ? batch : [batch])) {
+            // For blocks: _voxOriginal is innerHTML, cache key is the original textContent
+            const origText = item._voxIsBlock
+                ? ((() => { const tmp = document.createElement("div"); tmp.innerHTML = item._voxOriginal || ""; return tmp.textContent.trim(); })())
+                : (item._voxOriginal || "").trim();
+            if (origText && item.textContent !== origText) {
+                translations[origText] = item.textContent;
                 if (++count >= CACHE_MAX_ENTRIES) break;
             }
         }
@@ -393,17 +562,26 @@ function evictOldCaches() {
     for (let i = 0; i < removeCount; i++) localStorage.removeItem(keys[i].key);
 }
 
-function applyCachedTranslations(textNodes, translations) {
+function applyCachedTranslations(items, translations) {
     let applied = 0;
     isApplyingTranslation = true;
-    for (const node of textNodes) {
-        const original = node.textContent.trim();
+    for (const item of items) {
+        const original = item.textContent.trim();
         if (translations[original]) {
-            node._voxOriginal = node.textContent;
-            node.textContent = translations[original];
-            if (node.parentElement) node.parentElement.setAttribute("data-vox-done", "1");
-            translatedNodes.add(node);
-            nodeMap.set(`vox-cache-${nodeIdCounter++}`, [node]);
+            const isBlock = item.nodeType === 1 && BLOCK_TAGS.has(item.tagName.toLowerCase());
+            if (isBlock) {
+                item._voxOriginal = item.innerHTML;
+                item._voxIsBlock = true;
+                setBlockText(item, translations[original]);
+                item.setAttribute("data-vox-done", "1");
+            } else {
+                item._voxOriginal = item.textContent;
+                const t = translations[original];
+                item.textContent = needsSpaceBefore(item) ? " " + t : t;
+                if (item.parentElement) item.parentElement.setAttribute("data-vox-done", "1");
+            }
+            translatedNodes.add(item);
+            nodeMap.set(`vox-cache-${nodeIdCounter++}`, [item]);
             applied++;
         }
     }
