@@ -23,7 +23,6 @@ browser.runtime.sendMessage({ action: "getStatus" }).then(status => {
     if (status?.translationActive) {
         toggleSwitch.checked = true;
         toggleLabel.textContent = "Translation on";
-        // Restore saved language in selector
         if (status.language) {
             for (let i = 0; i < languageSelect.options.length; i++) {
                 if (languageSelect.options[i].value === status.language) {
@@ -36,6 +35,17 @@ browser.runtime.sendMessage({ action: "getStatus" }).then(status => {
     }
 }).catch(() => {});
 
+// Resolve "Auto" to the user's primary target language from app settings
+async function resolveLanguage(value) {
+    if (value !== "Auto") return value;
+    try {
+        const settings = await browser.runtime.sendMessage({ action: "getSettings" });
+        return settings?.primaryLanguage || "Russian";
+    } catch {
+        return "Russian";
+    }
+}
+
 // Toggle handler
 toggleSwitch.addEventListener("change", async () => {
     errorDiv.style.display = "none";
@@ -47,9 +57,10 @@ toggleSwitch.addEventListener("change", async () => {
         progressText.textContent = "Translating...";
 
         try {
+            const language = await resolveLanguage(languageSelect.value);
             await browser.runtime.sendMessage({
                 action: "enableTranslation",
-                targetLanguage: languageSelect.value
+                targetLanguage: language
             });
         } catch (e) {
             showError("Failed to start: " + e.message);

@@ -63,6 +63,13 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    if (request.action === "getSettings") {
+        browser.runtime.sendNativeMessage("application.id", { action: "getSettings" })
+            .then(r => sendResponse(r))
+            .catch(() => sendResponse({ primaryLanguage: "Russian", secondaryLanguage: "English" }));
+        return true;
+    }
+
     if (request.action === "translateChunks") {
         translateChunks(request.chunks, request.targetLanguage, sender.tab?.id);
         return true;

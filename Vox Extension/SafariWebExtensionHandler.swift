@@ -30,6 +30,10 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         case "getSubtitleUpdate":
             let result = readSubtitleState()
             respond(with: result, context: context)
+        case "getSettings":
+            let primary = UserDefaults.standard.string(forKey: "primaryTargetLanguage") ?? "Russian"
+            let secondary = UserDefaults.standard.string(forKey: "secondaryTargetLanguage") ?? "English"
+            respond(with: ["primaryLanguage": primary, "secondaryLanguage": secondary], context: context)
         default:
             respond(with: ["error": "Unknown action: \(action)"], context: context)
         }
