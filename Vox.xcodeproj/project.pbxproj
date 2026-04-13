@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		D88525BF2F83ADFD0071FD0E /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = D88525BE2F83ADFD0071FD0E /* SwiftWhisper */; };
 		D8D503E02F82A872006BD6A9 /* Vox Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		D8FC81732F8D696200E90164 /* SwiftWhisper in Frameworks */ = {isa = PBXBuildFile; productRef = D8FC81722F8D696200E90164 /* SwiftWhisper */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +88,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D8FC81732F8D696200E90164 /* SwiftWhisper in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -148,6 +150,7 @@
 			);
 			name = "Vox Extension";
 			packageProductDependencies = (
+				D8FC81722F8D696200E90164 /* SwiftWhisper */,
 			);
 			productName = "Vox Extension";
 			productReference = D8D503CA2F82A872006BD6A9 /* Vox Extension.appex */;
@@ -663,6 +666,11 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		D88525BE2F83ADFD0071FD0E /* SwiftWhisper */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D88525BD2F83ADFD0071FD0E /* XCRemoteSwiftPackageReference "SwiftWhisper" */;
+			productName = SwiftWhisper;
+		};
+		D8FC81722F8D696200E90164 /* SwiftWhisper */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D88525BD2F83ADFD0071FD0E /* XCRemoteSwiftPackageReference "SwiftWhisper" */;
 			productName = SwiftWhisper;
