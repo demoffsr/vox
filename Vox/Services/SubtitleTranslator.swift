@@ -77,49 +77,12 @@ final class SubtitleTranslator {
         request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 3
 
-        // Build the system prompt. Structure: show context, list of correct
-        // English terms, optional list of known mishearings, strict rules.
         let englishTermsBlock = glossary.englishTerms.joined(separator: "\n")
-
-        var system = """
-        /* prompt redacted */ \
-        , so character \
-        
-        """
-
-        if let topic {
-            system += "\n\nShow: \(topic)"
-        }
-
-        system += "\n\n\n\(englishTermsBlock)"
-
-        if let hints = glossary.asrHints, !hints.isEmpty {
-            // glossary.asrHints is stored as a single comma-joined string like
-            // "soups → supes, fought → Vought". Render one pair per line so
-            // Haiku has an easier time parsing the replacement list.
-            let hintLines = hints
-                .components(separatedBy: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-            system += "\n\n\n\(hintLines)"
-        }
-
-        system += """
-
-
-        STRICT RULES:
-        - 
-        - 
-        - 
-        - 
-        - 
-        - 
-        - 
-        - 
-
-        
-        """
+        let system = Prompts.asrCleanup(
+            glossaryTerms: englishTermsBlock,
+            topic: topic,
+            asrHints: glossary.asrHints
+        )
 
         let body: [String: Any] = [
             "model": ClaudeModel.haiku.rawValue,
@@ -410,9 +373,7 @@ final class SubtitleTranslator {
             "max_tokens": cinemaMode ? 50 : 30,
             "stream": false,
             "temperature": 0.3,
-            "system": cinemaMode
-                ? "/* prompt redacted */   Answer in 5-10 words. No punctuation."
-                : "/* prompt redacted */ No punctuation.",
+            "system": Prompts.topicDetection(cinemaMode: cinemaMode),
             "messages": [["role": "user", "content": text]]
         ]
 
@@ -480,14 +441,7 @@ final class SubtitleTranslator {
             }
         }()
 
-        let system = """
-        /* prompt redacted */
-        Rules:
-        - 
-        - No quotes, no trailing punctuation
-        - 
-        - 
-        """
+        let system = Prompts.historyTitle()
 
         let userContent = "\(capped)\n\nLanguage: \(language.displayName)\nType: \(kindLabel)"
 
@@ -540,22 +494,7 @@ final class SubtitleTranslator {
     ) async -> Glossary? {
         let langName = targetLanguage.displayName
 
-        let systemPrompt = """
-        /* prompt redacted */
-         \(langName).
-
-        Rules:
-        - 
-        -  → \(langName) equivalent (one per line)
-        - , key idioms/expletives used in the show
-        - For proper nouns (character names, organization names, place names):  \(langName) name from the localized version of the show. If no official \(langName) localization exists, keep the original English spelling — 
-        - For slang and in-universe terms:  \(langName) equivalents that match the show's tone
-        - If you're not confident about a specific translation, mark it with [?]
-        -  with common speech recognition mishearings
-          Format: misheard → correct (e.g. "soups" → "supes")
-
-        
-        """
+        let systemPrompt = Prompts.glossaryGeneration(targetLanguage: targetLanguage)
 
         // Fallback chain: try Sonnet first (best quality), then Haiku (usually available
         // under Sonnet overload), then Opus (independent capacity pool, last resort).
@@ -679,27 +618,7 @@ final class SubtitleTranslator {
             "max_tokens": 600,
             "stream": false,
             "temperature": 0.3,
-            "system": """
-            /* prompt redacted */
-             \(langName).
-
-            
-            
-            GLOSSARY:
-            English term → \(langName) equivalent
-            ...
-            ## ASR
-            misheard → correct
-            ...
-
-            Rules:
-            - Always give your best guess for the show — never say you cannot identify
-            - List at most 15 key terms (characters, slang, in-universe terms, key idioms)
-            - For proper nouns:  \(langName) name from the localized version. If none exists, keep original English — 
-            - For slang/in-universe terms:  \(langName) equivalents
-            - 
-            - Output ONLY this format. No explanations.
-            """,
+            "system": Prompts.topicWithGlossary(targetLanguage: targetLanguage),
             "messages": [["role": "user", "content": text]]
         ]
 
@@ -777,18 +696,7 @@ final class SubtitleTranslator {
         case .japanese: langName = "Japanese"
         }
 
-        var system = """
-        /* prompt redacted */ \(langName) subtitles.
-        
-        
-        
-        """
-        if let topic {
-            system += "\nVideo topic: \(topic)"
-        }
-        if let glossary {
-            system += glossary.promptFragment
-        }
+        let system = Prompts.polish(langName: langName, topic: topic, glossary: glossary)
 
         let body: [String: Any] = [
             "model": ClaudeModel.sonnet.rawValue,
@@ -841,17 +749,7 @@ final class SubtitleTranslator {
         case .japanese: langName = "Japanese"
         }
 
-        var system = """
-        /* prompt redacted */ \(langName) subtitles as a concise bullet-point summary.
-        
-        
-        
-        Output in \(langName).  (•) for each point.
-        
-        """
-        if let topic {
-            system += "\nVideo topic: \(topic)"
-        }
+        let system = Prompts.summarize(langName: langName, topic: topic)
 
         let body: [String: Any] = [
             "model": ClaudeModel.sonnet.rawValue,
@@ -904,20 +802,7 @@ final class SubtitleTranslator {
         case .japanese: langName = "Japanese"
         }
 
-        var system = """
-         \(langName) /* prompt redacted */
-        Include:
-        - 
-        - 
-        - 
-        - 
-        - 
-         Output in \(langName).
-        
-        """
-        if let topic {
-            system += "\nVideo topic: \(topic)"
-        }
+        let system = Prompts.studyNotes(langName: langName, topic: topic)
 
         let body: [String: Any] = [
             "model": ClaudeModel.sonnet.rawValue,
@@ -970,18 +855,7 @@ final class SubtitleTranslator {
         case .japanese: langName = "Japanese"
         }
 
-        let system = """
-        /* prompt redacted */ \(langName) 
-        Fix the new text ONLY:
-        - 
-        -  — do NOT add closing punctuation
-        - 
-        - 
-        - 
-        - , do not guess missing words
-        - 
-        - 
-        """
+        let system = Prompts.cleanup(langName: langName)
 
         var userContent = ""
         if !context.isEmpty {

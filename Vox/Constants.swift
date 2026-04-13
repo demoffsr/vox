@@ -9,93 +9,15 @@ enum Constants {
     static let appGroupID = "group.com.Vox.Vox"
 
     static func systemPrompt(targetLanguage: TargetLanguage) -> String {
-        let langInstruction: String
-        switch targetLanguage {
-        case .auto:
-            // Legacy RU↔EN fallback. The ⌘T flow now resolves a concrete target via
-            // LanguageDetector before calling this function, so this branch is only
-            // reached if a caller explicitly passes `.auto`. Kept for safety.
-            langInstruction = """
-            - If the text is not in Russian, translate to Russian
-            - If the text is in Russian, translate to English
-            """
-        case .english:
-            langInstruction = "- Translate to English"
-        case .russian:
-            langInstruction = "- Translate to Russian"
-        case .spanish:
-            langInstruction = "- Translate to Spanish"
-        case .french:
-            langInstruction = "- Translate to French"
-        case .german:
-            langInstruction = "- Translate to German"
-        case .chinese:
-            langInstruction = "- Translate to Chinese (Simplified)"
-        case .japanese:
-            langInstruction = "- Translate to Japanese"
-        }
-
-        return """
-        /* prompt redacted */ \
-         \
-        
-
-        \(langInstruction)
-        - 
-        - 
-        - 
-        - 
-        - 
-        """
+        Prompts.system(targetLanguage: targetLanguage)
     }
 
     static func subtitleTranslationPrompt(targetLanguage: TargetLanguage) -> String {
-        let lang: String
-        switch targetLanguage {
-        case .auto:     lang = "Russian"
-        case .english:  lang = "English"
-        case .russian:  lang = "Russian"
-        case .spanish:  lang = "Spanish"
-        case .french:   lang = "French"
-        case .german:   lang = "German"
-        case .chinese:  lang = "Simplified Chinese"
-        case .japanese: lang = "Japanese"
-        }
-
-        return """
-        /* prompt redacted */ // \(lang).
-        
-        
-        
-        
-        
-        """
+        Prompts.subtitleTranslation(targetLanguage: targetLanguage)
     }
 
     static func cinemaTranslationPrompt(targetLanguage: TargetLanguage) -> String {
-        let lang: String
-        switch targetLanguage {
-        case .auto:     lang = "Russian"
-        case .english:  lang = "English"
-        case .russian:  lang = "Russian"
-        case .spanish:  lang = "Spanish"
-        case .french:   lang = "French"
-        case .german:   lang = "German"
-        case .chinese:  lang = "Simplified Chinese"
-        case .japanese: lang = "Japanese"
-        }
-
-        return """
-        /* prompt redacted */ // \(lang).
-        
-         \(lang): colloquial forms, contractions, natural phrasing.
-         \(lang) equivalents — never word-for-word.
-        
-        
-        
-        
-        
-        """
+        Prompts.cinemaTranslation(targetLanguage: targetLanguage)
     }
 
     /// Punctuation characters that indicate a sentence end (Latin + CJK).
@@ -107,58 +29,7 @@ enum Constants {
     ]
 
     static func lookUpPrompt(targetLanguage: TargetLanguage) -> String {
-        let lang = targetLanguage.displayName
-        return """
-        /* prompt redacted */ \
-         \
-         \
-         \(lang).
-
-        
-        {
-          "dictionary": {
-            "partOfSpeech": "noun/verb/adjective/phrase/idiom/sentence",
-            "pronunciation": "IPA or transliteration, or null",
-            "entries": [
-              {
-                "meaning": "concise meaning in \(lang)",
-                "example": "example sentence in source language using the word",
-                "exampleTranslation": "same sentence translated to \(lang)"
-              }
-            ]
-          },
-          "context": {
-            "synonyms": [
-              { "word": "alternative translation in \(lang)", "note": "style or register hint in \(lang)" }
-            ],
-            "register": "neutral/formal/informal/slang",
-            "collocations": ["common phrase 1", "common phrase 2"],
-            "falseFriends": [
-              { "word": "similar-sounding word", "meaning": "what it actually means in \(lang)" }
-            ],
-            "notes": ["usage note or cultural context in \(lang)"]
-          },
-          "imageSearchQuery": "short English search query for images, or null"
-        }
-
-        Rules:
-        - . Each with a concise meaning in \(lang), \
-        plus an example sentence in the source language and its translation.
-        -  or commonly mispronounced words. null otherwise.
-        -  in \(lang), each with a brief \
-        register/style note (e.g. "поэтический", "разговорный", "технический").
-        -  of the input text.
-        -  or word combinations using this word (in source language).
-        -  that mean something different. Empty array if none.
-        -  in \(lang). Mention domain-specific usage if relevant.
-        -  for image search. \
-        ALWAYS provide a non-null query for any noun, noun phrase, or visually representable concept. \
-        Return null ONLY for abstract verbs, adjectives, or generic full sentences with no visual subject.
-        - For single words: rich dictionary entries + many synonyms + collocations.
-        - For phrases/idioms: dictionary explains the figurative meaning, context explains origin and equivalents.
-        - For full sentences: minimal dictionary (1 entry summarizing gist), context focuses on tone and register.
-        - 
-        """
+        Prompts.lookUp(targetLanguage: targetLanguage)
     }
 }
 

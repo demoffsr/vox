@@ -15,40 +15,7 @@ enum Constants {
     static let appGroupID = "group.com.Vox.Vox"
 
     static func systemPrompt(targetLanguage: TargetLanguage) -> String {
-        let langInstruction: String
-        switch targetLanguage {
-        case .auto:
-            langInstruction = """
-            - If the text is not in Russian, translate to Russian
-            - If the text is in Russian, translate to English
-            """
-        case .english: langInstruction = "- Translate to English"
-        case .russian: langInstruction = "- Translate to Russian"
-        case .spanish: langInstruction = "- Translate to Spanish"
-        case .french: langInstruction = "- Translate to French"
-        case .german: langInstruction = "- Translate to German"
-        case .chinese: langInstruction = "- Translate to Chinese (Simplified)"
-        case .japanese: langInstruction = "- Translate to Japanese"
-        }
-
-        return """
-        /* prompt redacted */
-
-        
-        -  In Russian, only the first word is capitalized in headings and buttons. WRONG: "Зарегистрироваться На Вебинар". RIGHT: "Зарегистрироваться на вебинар".
-        -  Do NOT expand them. WRONG: "искусственный интеллект". RIGHT: "AI".
-
-        Format rules:
-        \(langInstruction)
-        - 
-        - 
-        - 
-        - 
-        - Translate naturally, preserving tone and idioms.
-
-        Example input: ["Register For The Webinar", "AI and Text Analysis", "Contact"]
-        Example output: ["Зарегистрироваться на вебинар", "AI и анализ текста", "Контакты"]
-        """
+        Prompts.safariExtension(targetLanguage: targetLanguage)
     }
 }
 

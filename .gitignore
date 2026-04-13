@@ -1,3 +1,10 @@
 
 # Whisper model (too large for git)
 *.bin
+
+# Proprietary prompt strings (see Prompts.example.swift for interface)
+Vox/Config/Prompts.swift
+
+# Internal docs, specs, plans, roadmap
+docs/
+ROADMAP.md
