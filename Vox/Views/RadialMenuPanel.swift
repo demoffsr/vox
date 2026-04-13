@@ -157,12 +157,12 @@ struct RadialMenuView: View {
             onAction()
         }
         .onReceive(NotificationCenter.default.publisher(for: .radialMenuReady)) { _ in
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
                 isShowing = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .radialMenuDismiss)) { _ in
-            withAnimation(.easeIn(duration: 0.15)) {
+            withAnimation(.easeIn(duration: 0.12)) {
                 isDismissing = true
             }
         }
@@ -172,6 +172,7 @@ struct RadialMenuView: View {
         let isHovered = hoveredItem == item.id
         let itemOffset = offset(for: index, count: items.count)
         let isActive = item.isActive()
+        let expanded = isShowing && !isDismissing
 
         return Button(action: {
             item.action()
@@ -214,14 +215,18 @@ struct RadialMenuView: View {
                 hoveredItem = hovered ? item.id : nil
             }
         }
-        .offset(itemOffset)
-        .scaleEffect(isShowing && !isDismissing ? 1 : 0.01)
-        .opacity(isShowing && !isDismissing ? 1 : 0)
+        .offset(CGSize(
+            width: expanded ? itemOffset.width : 0,
+            height: expanded ? itemOffset.height : 0
+        ))
+        .scaleEffect(expanded ? 1 : 0.35)
+        .opacity(expanded ? 1 : 0)
+        .rotationEffect(.degrees(expanded ? 0 : (index % 2 == 0 ? -25 : 25)))
         .animation(
-            .spring(response: 0.4, dampingFraction: 0.7)
-                .delay(Double(index) * 0.05),
+            .spring(response: 0.5, dampingFraction: 0.6)
+                .delay(Double(index) * 0.065),
             value: isShowing
         )
-        .animation(.easeIn(duration: 0.15), value: isDismissing)
+        .animation(.easeIn(duration: 0.12), value: isDismissing)
     }
 }
