@@ -4,6 +4,7 @@
 
 # Proprietary prompt strings (see Prompts.example.swift for interface)
 Vox/Config/Prompts.swift
+Vox Extension/Prompts.swift
 
 # Internal docs, specs, plans, roadmap
 docs/
