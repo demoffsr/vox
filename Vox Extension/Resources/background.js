@@ -42,15 +42,25 @@ function pollNativeOnce() {
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log("[Vox bg] Message received:", request.action, "from:", sender.tab?.id ?? "popup");
 
-    if (request.action === "startTranslation") {
-        handleStartTranslation(request.targetLanguage);
+    if (request.action === "startTranslation" || request.action === "enableTranslation") {
+        forwardToActiveTab({ action: "enableTranslation", targetLanguage: request.targetLanguage });
         sendResponse({ status: "started" });
         return true;
     }
 
-    if (request.action === "restorePage") {
-        forwardToActiveTab({ action: "restorePage" });
-        return;
+    if (request.action === "restorePage" || request.action === "disableTranslation") {
+        forwardToActiveTab({ action: "disableTranslation" });
+        sendResponse({ status: "stopped" });
+        return true;
+    }
+
+    if (request.action === "getStatus") {
+        browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+            if (tabs[0]) {
+                browser.tabs.sendMessage(tabs[0].id, { action: "getStatus" }).then(r => sendResponse(r)).catch(() => sendResponse({ translationActive: false }));
+            } else { sendResponse({ translationActive: false }); }
+        }).catch(() => sendResponse({ translationActive: false }));
+        return true;
     }
 
     if (request.action === "translateChunks") {
@@ -104,23 +114,6 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
     }
 });
-
-async function handleStartTranslation(targetLanguage) {
-    console.log("[Vox bg] Starting translation, language:", targetLanguage);
-    try {
-        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-        console.log("[Vox bg] Active tab:", tabs[0]?.id, tabs[0]?.url);
-        if (tabs[0]) {
-            await browser.tabs.sendMessage(tabs[0].id, {
-                action: "translatePage",
-                targetLanguage: targetLanguage
-            });
-            console.log("[Vox bg] Sent translatePage to tab");
-        }
-    } catch (e) {
-        console.error("[Vox bg] Error sending to tab:", e);
-    }
-}
 
 async function forwardToActiveTab(message) {
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });

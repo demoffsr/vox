@@ -5,15 +5,20 @@
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">💬 <span>Vox</span></div>
+    <div class="panel">
+        <div class="title-bar">
+            <span class="title-icon">💬</span>
+            <span class="title-text">Vox</span>
         </div>
 
-        <div class="controls">
-            <div class="language-row">
-                <label>Translate to</label>
-                <select id="language">
+        <div class="card">
+            <div class="card-row">
+                <span class="card-label">Translate to</span>
+                <div class="language-capsule" id="languageCapsule">
+                    <span id="languageLabel">🌐 Auto</span>
+                    <svg class="chevron" width="8" height="5" viewBox="0 0 8 5"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <select id="language" class="language-select-hidden">
                     <option value="Auto">🌐 Auto</option>
                     <option value="English">🇬🇧 English</option>
                     <option value="Russian">🇷🇺 Russian</option>
@@ -25,18 +30,19 @@
                 </select>
             </div>
 
-            <button id="translateBtn" class="btn primary">⚡ Translate Page</button>
-            <button id="restoreBtn" class="btn secondary" style="display:none;">↩ Restore Original</button>
-            <div class="subtitle-divider"></div>
-            <button id="subtitleBtn" class="btn subtitle">🎬 Live Subtitles</button>
-            <div id="subtitleStatus" class="subtitle-status" style="display:none;">
-                <span class="pulse"></span> <span id="subtitleStatusText">Listening...</span>
+            <!-- Toggle switch -->
+            <div class="toggle-row" id="toggleRow">
+                <span class="toggle-label" id="toggleLabel">Translation off</span>
+                <label class="toggle">
+                    <input type="checkbox" id="toggleSwitch">
+                    <span class="toggle-track"></span>
+                </label>
             </div>
-        </div>
 
-        <div id="progress" class="progress" style="display:none;">
-            <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
-            <span id="progressText" class="progress-text">Translating...</span>
+            <div id="progress" class="progress" style="display:none;">
+                <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+                <span id="progressText" class="progress-text">Translating...</span>
+            </div>
         </div>
 
         <div id="error" class="error" style="display:none;"></div>
