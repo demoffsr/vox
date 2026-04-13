@@ -23,6 +23,13 @@ final class SubtitleService {
     private var lastWriteTime: TimeInterval = 0
     private var lastWrittenText: String = ""
 
+    // History persistence (injected by AppDelegate).
+    weak var historyStore: HistoryStore?
+    private var activeSessionID: UUID?
+    private var sessionStartTime: Date?
+    private var sessionHadTranslation: Bool = false
+    private var autosaveTask: Task<Void, Never>?
+
     // Translation state
     private var translator: SubtitleTranslator?
     private var draftTask: Task<Void, Never>?
@@ -121,8 +128,40 @@ final class SubtitleService {
 
         isRunning = true
 
+        // Create a history entry for this session. We write pairs as they
+        // arrive in translateFinal's success branch; the transcript blob
+        // is flushed periodically and finalized in stop().
+        if let store = historyStore {
+            let kind: HistoryKind = (displayMode == .cinema) ? .cinemaSession : .lectureSession
+            let id = store.createSession(
+                kind: kind,
+                targetLang: (AppSettings.shared.subtitleTranslationLanguage?.rawValue) ?? "",
+                model: (displayMode == .cinema ? ClaudeModel.haiku : ClaudeModel.sonnet).rawValue,
+                showName: userProvidedShowName
+            )
+            activeSessionID = id
+            sessionStartTime = .now
+            sessionHadTranslation = false
+
+            autosaveTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(15))
+                    guard let self else { return }
+                    guard let sid = self.activeSessionID else { return }
+                    self.historyStore?.flushSession(sessionID: sid)
+                }
+            }
+        }
+
         if initialTranslationActive && displayMode == .lecture {
             openTranslationStream()
+        }
+
+        // Show the overlay immediately so the user sees feedback before the first
+        // transcribed word. The panel stays visible for the lifetime of the session —
+        // no auto-fade — and is hidden only by stop() below.
+        if AppSettings.shared.showNativeSubtitles {
+            subtitlePanel.activate()
         }
 
         writeSubtitleState(text: "", status: "listening")
@@ -132,6 +171,24 @@ final class SubtitleService {
     func stop() async {
         guard isRunning else { return }
         isRunning = false
+
+        // Finalize or drop the history session before any per-session state
+        // is cleared. Keep `activeSessionID` alive until the very end so a
+        // late `processTranslation` artifact can still attach to it.
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        if let sid = activeSessionID, let store = historyStore {
+            if sessionHadTranslation {
+                store.finishSession(sessionID: sid, glossary: currentGlossary?.content)
+                Task { [weak store] in
+                    await store?.generateTitleIfNeeded(entryID: sid)
+                }
+            } else {
+                // No successful translation happened — don't pollute history
+                // with an empty ASR-only run.
+                store.delete(entryID: sid)
+            }
+        }
 
         draftTask?.cancel()
         draftTask = nil
@@ -144,7 +201,6 @@ final class SubtitleService {
         currentGlossary = nil
         glossaryTask?.cancel()
         glossaryTask = nil
-        userProvidedShowName = nil
         translator = nil
         recentTranslations = []
         sentenceBuffer.reset()
@@ -163,6 +219,14 @@ final class SubtitleService {
         subtitlePanel.fadeOut()
         writeSubtitleState(text: "", status: "stopped")
         print("[SubtitleService] Stopped")
+
+        // Drop history session state last — post-processing artifacts in
+        // `processTranslation` check `activeSessionID` and we want any
+        // late-arriving callbacks to land on the correct entry.
+        activeSessionID = nil
+        sessionStartTime = nil
+        sessionHadTranslation = false
+        userProvidedShowName = nil
     }
 
     // MARK: - Live Mode Switching
@@ -360,6 +424,25 @@ final class SubtitleService {
                 print("[\(mode.rawValue)] Done: \(resultWordCount) words returned")
                 vm.setTabContent(mode.targetTab, text: result)
                 vm.activeTab = mode.targetTab
+
+                // Attach the artifact to the current history session.
+                // `activeSessionID` stays alive until stop() finishes, so
+                // late-arriving post-processing calls still land correctly.
+                if let sid = activeSessionID {
+                    let artifactKind: ArtifactKind = {
+                        switch mode {
+                        case .polish:    return .polish
+                        case .summarize: return .summary
+                        case .studyMode: return .studyNotes
+                        }
+                    }()
+                    historyStore?.attachArtifact(
+                        sessionID: sid,
+                        kind: artifactKind,
+                        content: result,
+                        model: ClaudeModel.sonnet.rawValue
+                    )
+                }
             } else {
                 print("[\(mode.rawValue)] FAILED: no result")
             }
@@ -499,6 +582,16 @@ final class SubtitleService {
                 self.recentTranslations.append((original: textToTranslate, translated: result))
                 if self.recentTranslations.count > self.maxTranslationContext {
                     self.recentTranslations.removeFirst()
+                }
+
+                // Persist the pair to history (works for both lecture and cinema).
+                if let sid = self.activeSessionID {
+                    self.historyStore?.appendLine(
+                        sessionID: sid,
+                        source: textToTranslate,
+                        translated: result
+                    )
+                    self.sessionHadTranslation = true
                 }
                 switch self.displayMode {
                 case .lecture:

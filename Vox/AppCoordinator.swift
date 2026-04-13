@@ -49,7 +49,6 @@ final class AppCoordinator {
 
     /// Cmd+T: selected text → translate, no selection → radial menu
     private func smartHotkey() {
-        let oldText = NSPasteboard.general.string(forType: .string) ?? ""
         let oldCount = NSPasteboard.general.changeCount
         let clipboard = ClipboardService()
         clipboard.simulateCopy()
@@ -59,8 +58,8 @@ final class AppCoordinator {
             let newText = NSPasteboard.general.string(forType: .string) ?? ""
             let newCount = NSPasteboard.general.changeCount
 
-            // Text was selected only if clipboard changed AND content is different
-            if newCount != oldCount && newText != oldText && !newText.isEmpty {
+            // changeCount bump = system actually copied something (text was selected)
+            if newCount != oldCount && !newText.isEmpty {
                 translate()
             } else {
                 toggleRadialMenu()
@@ -134,7 +133,7 @@ final class AppCoordinator {
             RadialMenuItem(
                 id: "translate",
                 icon: "RadialTranslate",
-                label: "Translate",
+                label: "Look Up",
                 tint: .purple,
                 isActive: { false },
                 action: { [weak self] in self?.translate() }
@@ -142,7 +141,7 @@ final class AppCoordinator {
             RadialMenuItem(
                 id: "subtitles",
                 icon: "RadialSubtitles",
-                label: "Subtitles",
+                label: "Transcribe",
                 tint: .green,
                 isActive: { [weak self] in
                     guard let service = self?.subtitleService else { return false }
@@ -164,7 +163,7 @@ final class AppCoordinator {
             RadialMenuItem(
                 id: "translation",
                 icon: "RadialTranslation",
-                label: "Translation",
+                label: "Study Mode",
                 tint: .blue,
                 isActive: {
                     AppSettings.shared.subtitleTranslationLanguage != nil
@@ -197,7 +196,7 @@ final class AppCoordinator {
             RadialMenuItem(
                 id: "cinema",
                 icon: "RadialCinema",
-                label: "Cinema",
+                label: "TV Mode",
                 tint: .orange,
                 isActive: {
                     AppSettings.shared.subtitleTranslationLanguage != nil

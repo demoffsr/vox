@@ -443,6 +443,92 @@ final class SubtitleTranslator {
         }
     }
 
+    // MARK: - History Title Generation
+
+    /// Generate a short, descriptive title for a saved history entry.
+    /// Uses Haiku with a minimal system prompt. Returns the raw title
+    /// or `nil` on timeout / HTTP error / empty refusal.
+    ///
+    /// Used by `HistoryStore.generateTitleIfNeeded` as fire-and-forget
+    /// background work after a quick translation or subtitle session is
+    /// persisted. Cinema sessions with a user-provided show name bypass
+    /// this method entirely.
+    func generateTitle(
+        forTranscript text: String,
+        kind: HistoryKind,
+        language: TargetLanguage
+    ) async -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Cap the user message at ~1500 characters — plenty for Haiku to
+        // identify a topic without burning tokens on long lectures.
+        let capped = trimmed.count > 1500 ? String(trimmed.prefix(1500)) : trimmed
+
+        var request = URLRequest(url: Constants.apiURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(Constants.apiVersion, forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 5
+
+        let kindLabel: String = {
+            switch kind {
+            case .quickTranslation: return "quick"
+            case .lectureSession:   return "lecture"
+            case .cinemaSession:    return "cinema"
+            }
+        }()
+
+        let system = """
+        /* prompt redacted */
+        Rules:
+        - 
+        - No quotes, no trailing punctuation
+        - 
+        - 
+        """
+
+        let userContent = "\(capped)\n\nLanguage: \(language.displayName)\nType: \(kindLabel)"
+
+        let body: [String: Any] = [
+            "model": ClaudeModel.haiku.rawValue,
+            "max_tokens": 30,
+            "stream": false,
+            "temperature": 0.4,
+            "system": system,
+            "messages": [["role": "user", "content": userContent]]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let firstBlock = content.first,
+                  let raw = firstBlock["text"] as? String else {
+                return nil
+            }
+            var title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Strip leading/trailing quotes if the model added them.
+            title = title.trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{201C}\u{201D}\u{00AB}\u{00BB}'"))
+            // Strip trailing punctuation.
+            while let last = title.last, ".!?,;:".contains(last) {
+                title.removeLast()
+            }
+            if title.isEmpty { return nil }
+            let lower = title.lowercased()
+            if lower.contains("cannot") || lower.contains("can't") || lower.contains("unable") {
+                return nil
+            }
+            return title
+        } catch {
+            print("[HistoryTitle] FAILED: \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Glossary Generation
 
     /// Generate a translation glossary for a known show/movie.

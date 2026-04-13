@@ -3,13 +3,15 @@ import AppKit
 // MARK: - Subtitle Panel (Pure AppKit)
 
 /// Floating subtitle overlay. Pure AppKit — no SwiftUI, no observation issues.
-/// Dual-line display: original (small, dim) on top, translation (large, bright) below.
 /// Supports streaming — call appendTranslation() per token for typewriter effect.
+///
+/// The panel is visible continuously while subtitles are enabled (no auto-fade timer);
+/// its height is recalculated on every text update so the box hugs current content
+/// (1 line ≈ topPadding + lineHeight + bottomPadding, 2 lines adds one more lineHeight).
+/// The bottom edge stays pinned to the screen so text doesn't jump as lines grow.
 @MainActor
 final class SubtitlePanel: NSPanel {
     private let label = NSTextField(labelWithString: "")
-    private let originalLabel = NSTextField(labelWithString: "")
-    private var fadeTimer: Timer?
     private var isFadingOut = false
 
     private var rawText: String = ""
@@ -22,8 +24,16 @@ final class SubtitlePanel: NSPanel {
 
     private let maxLineWidth: CGFloat = 550
     private let subtitleFont = NSFont.systemFont(ofSize: 20, weight: .medium)
-    private let originalFont = NSFont.systemFont(ofSize: 14, weight: .regular)
     private static let panelWidth: CGFloat = 620
+    private static let verticalPadding: CGFloat = 12
+    private static let maxLines = 2
+
+    /// Actual line height NSTextField uses for the subtitle font — computed via
+    /// NSLayoutManager so our frame math matches what AppKit will actually draw.
+    private lazy var subtitleLineHeight: CGFloat = {
+        let lm = NSLayoutManager()
+        return ceil(lm.defaultLineHeight(for: subtitleFont))
+    }()
 
     /// What's currently shown on screen (translation if available, otherwise original).
     var displayText: String {
@@ -49,9 +59,8 @@ final class SubtitlePanel: NSPanel {
         //   2) dark overlay — keeps text readable on bright video frames
         //
         // Pure glass alone disappears on white/yellow scenes, so we retain a 0.55 black
-        // wash under the labels while gaining the glass edge of the rest of the app.
+        // wash under the label while gaining the glass edge of the rest of the app.
         let visualEffect = VoxPanelChrome.makeGlassBackground(cornerRadius: 16)
-        visualEffect.frame = NSRect(x: 0, y: 0, width: Self.panelWidth, height: 100)
 
         let bg = NSView()
         bg.wantsLayer = true
@@ -61,21 +70,7 @@ final class SubtitlePanel: NSPanel {
         bg.layer?.borderWidth = 0.5
         bg.layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
 
-        // Original label — small, dim, shown above translation
-        originalLabel.font = originalFont
-        originalLabel.textColor = NSColor.white.withAlphaComponent(0.5)
-        originalLabel.backgroundColor = .clear
-        originalLabel.isBezeled = false
-        originalLabel.isEditable = false
-        originalLabel.isSelectable = false
-        originalLabel.lineBreakMode = .byTruncatingTail
-        originalLabel.maximumNumberOfLines = 1
-        originalLabel.alignment = .center
-        originalLabel.cell?.wraps = false
-        originalLabel.cell?.isScrollable = false
-        originalLabel.isHidden = true
-
-        // Translation/main label
+        // Subtitle label — centered, multi-line, clipped to maxLines.
         label.font = subtitleFont
         label.textColor = .white
         label.backgroundColor = .clear
@@ -83,7 +78,7 @@ final class SubtitlePanel: NSPanel {
         label.isEditable = false
         label.isSelectable = false
         label.lineBreakMode = .byWordWrapping
-        label.maximumNumberOfLines = 2
+        label.maximumNumberOfLines = Self.maxLines
         label.alignment = .center
         label.cell?.wraps = true
         label.cell?.isScrollable = false
@@ -94,15 +89,15 @@ final class SubtitlePanel: NSPanel {
         textShadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
         label.shadow = textShadow
 
-        bg.addSubview(originalLabel)
         bg.addSubview(label)
         visualEffect.addSubview(bg)
         self.contentView = visualEffect
 
-        // Layout: visualEffect resizes with panel, bg pinned to its edges, labels pinned to bg.
+        // Layout: visualEffect resizes with panel, bg pinned to its edges, label pinned
+        // to bg with symmetric vertical padding. No center constraint — the frame math
+        // in fit(toLineCount:) guarantees bg height == padding*2 + label intrinsic height.
         visualEffect.autoresizingMask = [.width, .height]
         bg.translatesAutoresizingMaskIntoConstraints = false
-        originalLabel.translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             bg.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
@@ -110,17 +105,15 @@ final class SubtitlePanel: NSPanel {
             bg.topAnchor.constraint(equalTo: visualEffect.topAnchor),
             bg.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor),
 
-            originalLabel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 24),
-            originalLabel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -24),
-            originalLabel.topAnchor.constraint(equalTo: bg.topAnchor, constant: 10),
-
             label.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 24),
             label.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -24),
-            label.topAnchor.constraint(equalTo: originalLabel.bottomAnchor, constant: 2),
-            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -10),
+            label.topAnchor.constraint(equalTo: bg.topAnchor, constant: Self.verticalPadding),
+            label.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -Self.verticalPadding),
         ])
 
-        positionAtBottom()
+        // Seed frame to 1-line height + correct screen position. Height is recomputed
+        // on every updateLabel() call via fit(toLineCount:).
+        fit(toLineCount: 1)
     }
 
     override var canBecomeKey: Bool { false }
@@ -128,12 +121,22 @@ final class SubtitlePanel: NSPanel {
 
     // MARK: - Public API
 
+    /// Make the panel visible and ready to stream subtitles. Called from
+    /// `SubtitleService.start()` so the overlay shows up immediately, before the
+    /// first transcribed word.
+    func activate() {
+        isFadingOut = false
+        updateLabel() // size panel to current (possibly empty) content
+        alphaValue = 1
+        orderFrontRegardless()
+    }
+
     func showVolatile(_ text: String) {
         if translationOverride == nil {
             rawText = text
             updateLabel()
         }
-        show()
+        makeVisible()
     }
 
     func showFinal(_ text: String) {
@@ -145,14 +148,14 @@ final class SubtitlePanel: NSPanel {
             }
             updateLabel()
         }
-        show()
+        makeVisible()
     }
 
     /// Set translation text directly (no streaming). Updates label immediately.
     func showTranslation(_ text: String) {
         translationOverride = text
         updateLabel()
-        show()
+        makeVisible()
     }
 
     /// Append a streaming token to the translation. Typewriter effect.
@@ -164,7 +167,7 @@ final class SubtitlePanel: NSPanel {
         }
         translationOverride! += token
         updateLabel()
-        show()
+        makeVisible()
     }
 
     /// Clears translation and returns a new generation token.
@@ -172,8 +175,6 @@ final class SubtitlePanel: NSPanel {
     func clearTranslation() -> UInt64 {
         translationGeneration += 1
         translationOverride = nil
-        originalLabel.isHidden = true
-        originalLabel.stringValue = ""
         updateLabel()
         return translationGeneration
     }
@@ -182,14 +183,14 @@ final class SubtitlePanel: NSPanel {
     func showTranslationPending() {
         translationOverride = "..."
         updateLabel()
-        show()
+        makeVisible()
     }
 
+    /// Fade out and hide the panel. Called from `SubtitleService.stop()` — the panel
+    /// never hides on its own while subtitles are running.
     func fadeOut() {
         guard !isFadingOut else { return }
         isFadingOut = true
-        fadeTimer?.invalidate()
-        fadeTimer = nil
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.3
             animator().alphaValue = 0
@@ -200,8 +201,6 @@ final class SubtitlePanel: NSPanel {
             self.rawText = ""
             self.translationOverride = nil
             self.label.stringValue = ""
-            self.originalLabel.stringValue = ""
-            self.originalLabel.isHidden = true
         })
     }
 
@@ -210,8 +209,6 @@ final class SubtitlePanel: NSPanel {
     private func updateLabel() {
         let text = translationOverride ?? rawText
         let allWords = text.split(separator: " ").map(String.init)
-
-        let maxLines = 2
 
         // Word-wrap by measured pixel width
         var lines: [String] = []
@@ -229,32 +226,35 @@ final class SubtitlePanel: NSPanel {
             lines.append(currentLine)
         }
 
-        let visible = lines.suffix(maxLines)
+        let visible = lines.suffix(Self.maxLines)
         label.stringValue = visible.joined(separator: "\n")
-        label.maximumNumberOfLines = maxLines
+        label.maximumNumberOfLines = Self.maxLines
+
+        // Panel hugs current line count (minimum 1 so empty state stays visible).
+        let lineCount = max(1, visible.count)
+        fit(toLineCount: lineCount)
     }
 
-    private func show() {
+    private func makeVisible() {
         isFadingOut = false
-        fadeTimer?.invalidate()
         alphaValue = 1
-        if !isVisible {
-            positionAtBottom()
-        }
         orderFrontRegardless()
-
-        fadeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async { self?.fadeOut() }
-        }
     }
 
-    private func positionAtBottom() {
+    /// Resizes the panel height to `verticalPadding*2 + lineCount * lineHeight`,
+    /// keeping the bottom edge pinned so text doesn't jump when the line count changes.
+    private func fit(toLineCount lineCount: Int) {
+        let totalHeight = Self.verticalPadding * 2 + CGFloat(lineCount) * subtitleLineHeight
+
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
-        setFrameOrigin(NSPoint(
+        let newFrame = NSRect(
             x: screenFrame.midX - Self.panelWidth / 2,
-            y: screenFrame.minY + 80
-        ))
+            y: screenFrame.minY + 80,
+            width: Self.panelWidth,
+            height: totalHeight
+        )
+        setFrame(newFrame, display: true)
     }
 
     private func measure(_ text: String) -> CGFloat {

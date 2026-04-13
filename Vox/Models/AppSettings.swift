@@ -51,16 +51,6 @@ final class AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: "showNativeSubtitles") }
     }
 
-    var subtitleTranslationModel: ClaudeModel {
-        get {
-            let raw = UserDefaults.standard.string(forKey: "subtitleTranslationModel") ?? ClaudeModel.sonnet.rawValue
-            return ClaudeModel(rawValue: raw) ?? .sonnet
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "subtitleTranslationModel")
-        }
-    }
-
     /// Installed speech recognition locale codes (e.g. "en", "ru"). Updated at launch and on manual refresh.
     var installedLocales: Set<String> = []
 
