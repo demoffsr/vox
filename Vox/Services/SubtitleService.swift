@@ -39,13 +39,13 @@ final class SubtitleService {
     /// Cinema: accumulates text from cancelled translations so rapid dialogue gets batched
     private var pendingFinalText: String = ""
     private var rateLimitUntil: TimeInterval = 0
-    private var videoTopic: String?
     private var translationCount = 0
     private var accumulatedEnglish: [String] = []
-    // Glossary state
-    private var currentGlossary: Glossary?
-    private var glossaryTask: Task<Void, Never>?
-    private var userProvidedShowName: String?
+
+    private lazy var glossary: GlossaryManager = GlossaryManager(
+        translatorProvider: { [weak self] in self?.ensureTranslator() },
+        transcriber: transcriber
+    )
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -59,6 +59,17 @@ final class SubtitleService {
 
     private var displayMode: SubtitleDisplayMode {
         AppSettings.shared.subtitleDisplayMode
+    }
+
+    /// Lazy factory shared by the coordinator, `GlossaryManager`, and (in Step 3)
+    /// `TranslationOrchestrator`. Ensures exactly one `SubtitleTranslator` per
+    /// session and exactly one Keychain read.
+    private func ensureTranslator() -> SubtitleTranslator? {
+        if let translator { return translator }
+        guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return nil }
+        let created = SubtitleTranslator(apiKey: apiKey)
+        translator = created
+        return created
     }
 
     func start() async {
@@ -135,7 +146,7 @@ final class SubtitleService {
             kind: kind,
             targetLang: (AppSettings.shared.subtitleTranslationLanguage?.rawValue) ?? "",
             model: (displayMode == .cinema ? ClaudeModel.haiku : ClaudeModel.sonnet).rawValue,
-            showName: userProvidedShowName
+            showName: glossary.userProvidedShowName
         )
 
         if initialTranslationActive && displayMode == .lecture {
@@ -162,19 +173,16 @@ final class SubtitleService {
         // late `processTranslation` artifact can still attach to it —
         // `session.endSession` writes the blob but does NOT null out the ID;
         // `session.finalizeTeardown()` does, called last below.
-        session.endSession(glossaryContent: currentGlossary?.content)
+        session.endSession(glossaryContent: glossary.currentGlossary?.content)
 
         draftTask?.cancel()
         draftTask = nil
         finalTask?.cancel()
         finalTask = nil
         pendingFinalText = ""
-        videoTopic = nil
         translationCount = 0
         accumulatedEnglish = []
-        currentGlossary = nil
-        glossaryTask?.cancel()
-        glossaryTask = nil
+        glossary.reset()
         translator = nil
         recentTranslations = []
         sentenceBuffer.reset()
@@ -198,7 +206,6 @@ final class SubtitleService {
         // `processTranslation` check `activeSessionID` and we want any
         // late-arriving callbacks to land on the correct entry.
         session.finalizeTeardown()
-        userProvidedShowName = nil
     }
 
     // MARK: - Live Mode Switching
@@ -212,11 +219,12 @@ final class SubtitleService {
             // a redundant "same language" tap from the menu would cancel an in-flight
             // glossary retry and restart from scratch.
             let languageChanged = previousLanguage != language
-            let glossaryShowName = userProvidedShowName ?? videoTopic
+            let isUserProvided = glossary.userProvidedShowName != nil
+            let glossaryShowName = glossary.userProvidedShowName ?? glossary.videoTopic
             if languageChanged {
-                currentGlossary = nil
+                glossary.resetForLanguageChange()
                 if let glossaryShowName {
-                    startGlossaryGeneration(showName: glossaryShowName, isUserProvided: userProvidedShowName != nil, language: language)
+                    startGlossaryGeneration(showName: glossaryShowName, isUserProvided: isUserProvided, language: language)
                 }
             }
 
@@ -224,7 +232,7 @@ final class SubtitleService {
                 streamViewModel?.selectedLanguage = language
                 streamViewModel?.clear()
                 recentTranslations = []
-                videoTopic = nil
+                glossary.clearDetectedTopic()
                 translationCount = 0
                 accumulatedEnglish = []
                 sentenceBuffer.reset()
@@ -253,13 +261,9 @@ final class SubtitleService {
             pendingFinalText = ""
             translator = nil
             recentTranslations = []
-            videoTopic = nil
             translationCount = 0
             accumulatedEnglish = []
-            currentGlossary = nil
-            glossaryTask?.cancel()
-            glossaryTask = nil
-            userProvidedShowName = nil
+            glossary.reset()
             sentenceBuffer.reset()
             print("[SubtitleService] Translation disabled")
         }
@@ -291,39 +295,7 @@ final class SubtitleService {
     // MARK: - Glossary
 
     func startGlossaryGeneration(showName: String, isUserProvided: Bool, language: TargetLanguage? = nil) {
-        if isUserProvided {
-            videoTopic = showName
-            userProvidedShowName = showName
-        }
-
-        guard let targetLang = language ?? AppSettings.shared.subtitleTranslationLanguage else { return }
-
-        if translator == nil {
-            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
-            translator = SubtitleTranslator(apiKey: apiKey)
-        }
-        guard let translator else { return }
-
-        glossaryTask?.cancel()
-        glossaryTask = Task {
-            print("[Glossary] Generating for \"\(showName)\" (user: \(isUserProvided))...")
-            if let glossary = await translator.generateGlossary(
-                showName: showName, targetLanguage: targetLang, isUserProvided: isUserProvided
-            ) {
-                self.currentGlossary = glossary
-                let termLines = glossary.content.components(separatedBy: "\n")
-                    .filter { $0.contains("→") || $0.contains("—") }
-                    .count
-                print("[Glossary] Ready: \(glossary.content.count) chars, \(termLines) term lines")
-                print("[Glossary] Content preview:\n\(glossary.content.prefix(600))")
-                if let hints = glossary.asrHints {
-                    print("[Glossary] ASR hints: \(hints.prefix(400))")
-                }
-                self.pushVocabularyToTranscriber()
-            } else {
-                print("[Glossary] FAILED for \"\(showName)\"")
-            }
-        }
+        glossary.startGeneration(showName: showName, isUserProvided: isUserProvided, language: language)
     }
 
     private func openTranslationStream() {
@@ -353,11 +325,7 @@ final class SubtitleService {
         guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
         guard !vm.isProcessing(mode: mode) else { return }
 
-        if translator == nil {
-            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
-            translator = SubtitleTranslator(apiKey: apiKey)
-        }
-        guard let translator else { return }
+        guard let translator = ensureTranslator() else { return }
 
         let text = vm.accumulatedText
         let wordCount = text.split(separator: " ").count
@@ -366,29 +334,30 @@ final class SubtitleService {
         Task {
             defer { vm.setProcessing(mode, false) }
 
-            if videoTopic == nil {
+            if glossary.videoTopic == nil {
                 let topicSource = accumulatedEnglish.isEmpty ? text : accumulatedEnglish.joined(separator: " ")
                 let sourceWordCount = topicSource.split(separator: " ").count
                 print("[Topic] Detecting from \(sourceWordCount) words...")
                 if let topic = await translator.detectTopic(from: topicSource) {
-                    videoTopic = topic
+                    glossary.setTopicFromPostProcessing(topic)
                     print("[Topic] Detected: \"\(topic)\"")
                 } else {
                     print("[Topic] FAILED: no result")
                 }
             }
 
-            let topicLog = videoTopic.map { "topic: \"\($0)\"" } ?? "no topic"
+            let currentTopic = glossary.videoTopic
+            let topicLog = currentTopic.map { "topic: \"\($0)\"" } ?? "no topic"
             print("[\(mode.rawValue)] Sending \(wordCount) words to Sonnet (\(topicLog))")
 
             let result: String?
             switch mode {
             case .polish:
-                result = await translator.polish(text: text, topic: videoTopic, glossary: currentGlossary, language: targetLang)
+                result = await translator.polish(text: text, topic: currentTopic, glossary: glossary.currentGlossary, language: targetLang)
             case .summarize:
-                result = await translator.summarize(text: text, topic: videoTopic, language: targetLang)
+                result = await translator.summarize(text: text, topic: currentTopic, language: targetLang)
             case .studyMode:
-                result = await translator.studyNotes(text: text, topic: videoTopic, language: targetLang)
+                result = await translator.studyNotes(text: text, topic: currentTopic, language: targetLang)
             }
 
             if let result {
@@ -430,15 +399,11 @@ final class SubtitleService {
 
         draftTask?.cancel()
 
-        if translator == nil {
-            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
-            translator = SubtitleTranslator(apiKey: apiKey)
-        }
-        guard let translator else { return }
+        guard let translator = ensureTranslator() else { return }
 
         let prevTurns = recentTranslations
-        let currentTopic = videoTopic
-        let glossary = currentGlossary
+        let currentTopic = glossary.videoTopic
+        let glossarySnapshot = glossary.currentGlossary
 
         print("[Draft] EN: \"\(text)\"")
 
@@ -450,7 +415,7 @@ final class SubtitleService {
                     model: .haiku,
                     previousTurns: prevTurns,
                     topic: currentTopic,
-                    glossary: glossary,
+                    glossary: glossarySnapshot,
                     onToken: { _ in }
                 )
                 guard !Task.isCancelled else { return }
@@ -507,15 +472,11 @@ final class SubtitleService {
     }
 
     private func startFinalTranslation(_ text: String, targetLang: TargetLanguage, isCinema: Bool) {
-        if translator == nil {
-            guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return }
-            translator = SubtitleTranslator(apiKey: apiKey)
-        }
-        guard let translator else { return }
+        guard let translator = ensureTranslator() else { return }
 
         let prevTurns = recentTranslations
-        let currentTopic = videoTopic
-        let glossary = currentGlossary
+        let currentTopic = glossary.videoTopic
+        let glossarySnapshot = glossary.currentGlossary
 
         print("[Final] EN: \"\(text)\" (context: \(prevTurns.count) turns)")
 
@@ -528,9 +489,9 @@ final class SubtitleService {
                 // correctASRTerms returns the original text — cancellation
                 // rethrows so the outer catch handles it.
                 var textToTranslate = text
-                if Self.enableASRCleanup, let glossary {
+                if Self.enableASRCleanup, let glossarySnapshot {
                     textToTranslate = try await translator.correctASRTerms(
-                        text: text, glossary: glossary, topic: currentTopic
+                        text: text, glossary: glossarySnapshot, topic: currentTopic
                     )
                 }
 
@@ -541,7 +502,7 @@ final class SubtitleService {
                     model: finalModel,
                     previousTurns: prevTurns,
                     topic: currentTopic,
-                    glossary: glossary,
+                    glossary: glossarySnapshot,
                     cinemaMode: isCinema,
                     onToken: { _ in }
                 )
@@ -566,24 +527,22 @@ final class SubtitleService {
                 self.accumulatedEnglish.append(text)
                 self.translationCount += 1
                 let detectAfter = isCinema ? 5 : 3
-                if self.translationCount == detectAfter, self.videoTopic == nil {
+                if self.translationCount == detectAfter, self.glossary.videoTopic == nil {
                     let combined = self.accumulatedEnglish.joined(separator: " ")
                     Task {
                         if isCinema, let targetLang = AppSettings.shared.subtitleTranslationLanguage {
                             // Single call: detect topic + generate glossary
-                            if let result = await translator.detectTopicWithGlossary(
+                            if let detected = await translator.detectTopicWithGlossary(
                                 from: combined, targetLanguage: targetLang
                             ) {
-                                self.videoTopic = result.topic
-                                self.currentGlossary = result.glossary
-                                print("[Topic+Glossary] \"\(result.topic)\", \(result.glossary.content.count) chars")
-                                self.pushVocabularyToTranscriber()
+                                print("[Topic+Glossary] \"\(detected.topic)\", \(detected.glossary.content.count) chars")
+                                self.glossary.applyAutoDetectedTopic(detected.topic, glossary: detected.glossary)
                             }
                         } else {
                             // Lecture: topic only
                             if let topic = await translator.detectTopic(from: combined) {
-                                self.videoTopic = topic
                                 print("[Topic] Detected: \"\(topic)\"")
+                                self.glossary.applyAutoDetectedTopic(topic, glossary: nil)
                             }
                         }
                     }
@@ -606,60 +565,6 @@ final class SubtitleService {
                 }
             }
         }
-    }
-
-    // MARK: - ASR Vocabulary
-
-    /// Collects terms from the current glossary + videoTopic and pushes them into
-    /// SpeechAnalyzer.contextualStrings to bias recognition. Safe to call at any time —
-    /// if the analyzer isn't running, LiveTranscriber.updateVocabulary returns silently.
-    private func pushVocabularyToTranscriber() {
-        var words: [String] = []
-
-        // (1) Show name from videoTopic — format "<name>, <genre>, <setting>"
-        if let topic = videoTopic {
-            let name = topic.components(separatedBy: ",").first?
-                .trimmingCharacters(in: .whitespaces) ?? topic
-            if !name.isEmpty { words.append(name) }
-        }
-
-        if let glossary = currentGlossary {
-            // (2) Left side of each content line — the English term.
-            //     Single source of truth lives on Glossary.englishTerms.
-            words.append(contentsOf: glossary.englishTerms)
-
-            // (3) Right side of asrHints — the correct spelling.
-            //     Format: `"misheard" → "correct", "x" → "y"`
-            if let hints = glossary.asrHints {
-                for pair in hints.components(separatedBy: ",") {
-                    let sides = pair.components(separatedBy: "→")
-                    guard sides.count == 2 else { continue }
-                    let right = sides[1]
-                        .trimmingCharacters(in: .whitespaces)
-                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{201C}\u{201D}\u{00AB}\u{00BB}'"))
-                        .trimmingCharacters(in: .whitespaces)
-                    if !right.isEmpty { words.append(right) }
-                }
-            }
-        }
-
-        // Dedup preserving order, cap at 100 (empirical ceiling from Apple contextualStrings research).
-        var seen = Set<String>()
-        let unique = words.filter { seen.insert($0.lowercased()).inserted }
-        let capped = Array(unique.prefix(100))
-
-        guard !capped.isEmpty else { return }
-
-        // ASR biasing DISABLED — see docs/apple-speech-tuning-research.md §8.
-        // Summary: contextualStrings on SpeechTranscriber (macOS 26.1) is silently
-        // rejected by EAR worker ("Invalid JIT profile"), and when it does partially
-        // apply it shifts ASR toward wrong phonetic neighbors — net negative vs
-        // baseline recognition. Translator-side glossary (via Claude prompt) is the
-        // only channel that reliably improves quality.
-        // Re-enable by uncommenting the line below if Apple fixes runtime setContext
-        // for SpeechTranscriber in a future macOS update.
-        // transcriber.updateVocabulary(capped)
-        print("[Vocabulary] Biasing disabled (Phase 1 retrospective). Would have pushed \(capped.count) words.")
     }
 
     // MARK: - IPC
