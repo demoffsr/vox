@@ -16,6 +16,7 @@ final class TranslationViewModel {
     // Smart Look Up state
     var activeTab: LookUpTab = .translation
     var lookUpData: LookUpData?
+    var lookUpError: String?
     var isLoadingLookUp: Bool = false
 
     // Image search state
@@ -269,6 +270,7 @@ final class TranslationViewModel {
         // Claude lookup (dictionary + context + imageSearchQuery)
         if text != lookUpSourceText || lookUpData == nil {
             lookUpData = nil
+            lookUpError = nil
             lookUpSourceText = nil
             imageData = []
             imageSourceText = nil
@@ -306,6 +308,7 @@ final class TranslationViewModel {
         } catch {
             print("[LookUp] Error: \(error)")
             lookUpData = nil
+            lookUpError = error.localizedDescription
         }
         isLoadingLookUp = false
 

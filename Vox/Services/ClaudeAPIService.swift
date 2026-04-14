@@ -41,25 +41,75 @@ final class ClaudeAPIService {
         return request
     }
 
-    /// Strips markdown code fences and extracts the JSON object from LLM output.
+    /// Extracts a JSON object from LLM output. Cascade:
+    /// 1) raw text already is a JSON object,
+    /// 2) after stripping markdown fences,
+    /// 3) first balanced {...} via brace-matching scanner that respects
+    ///    string literals and \" / \\ escapes.
+    /// Returns best-effort text; JSONDecoder surfaces a real error if all fail.
     static func extractJSON(from text: String) -> String {
-        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Remove markdown code fences (```json ... ``` or ``` ... ```)
-        if cleaned.hasPrefix("```") {
-            if let firstNewline = cleaned.firstIndex(of: "\n") {
-                cleaned = String(cleaned[cleaned.index(after: firstNewline)...])
-            }
-            if cleaned.hasSuffix("```") {
-                cleaned = String(cleaned.dropLast(3))
-            }
-            cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.isJSONObject(trimmed) { return trimmed }
+
+        let unfenced = Self.stripMarkdownFences(trimmed)
+        if Self.isJSONObject(unfenced) { return unfenced }
+
+        if let extracted = Self.firstBalancedJSONObject(in: unfenced) {
+            return extracted
         }
-        // Find JSON object boundaries as a fallback
-        if let start = cleaned.firstIndex(of: "{"),
-           let end = cleaned.lastIndex(of: "}") {
-            cleaned = String(cleaned[start...end])
+
+        return unfenced
+    }
+
+    // Helpers are intentionally private: extractJSON is the single public
+    // entry point; expanding surface "for symmetry" is not wanted.
+
+    /// True only if the text parses as a JSON *object* (not array / string / null),
+    /// since LookUpResponse expects a top-level object.
+    private static func isJSONObject(_ string: String) -> Bool {
+        guard let data = string.data(using: .utf8) else { return false }
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) != nil
+    }
+
+    private static func stripMarkdownFences(_ text: String) -> String {
+        var cleaned = text
+        guard cleaned.hasPrefix("```") else { return cleaned }
+        if let firstNewline = cleaned.firstIndex(of: "\n") {
+            cleaned = String(cleaned[cleaned.index(after: firstNewline)...])
         }
-        return cleaned
+        if cleaned.hasSuffix("```") {
+            cleaned = String(cleaned.dropLast(3))
+        }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Scans for the first balanced {...}. Tracks inString, escaped state
+    /// so braces inside string literals don't change depth and \" / \\
+    /// are handled correctly.
+    private static func firstBalancedJSONObject(in text: String) -> String? {
+        guard let startIdx = text.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var idx = startIdx
+        while idx < text.endIndex {
+            let c = text[idx]
+            if escaped {
+                escaped = false
+            } else if inString {
+                if c == "\\" { escaped = true }
+                else if c == "\"" { inString = false }
+            } else {
+                if c == "\"" { inString = true }
+                else if c == "{" { depth += 1 }
+                else if c == "}" {
+                    depth -= 1
+                    if depth == 0 { return String(text[startIdx...idx]) }
+                }
+            }
+            idx = text.index(after: idx)
+        }
+        return nil
     }
 
     static func parseSSELine(_ line: String) -> String? {

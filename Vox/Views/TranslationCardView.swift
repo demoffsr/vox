@@ -184,6 +184,8 @@ struct TranslationCardView: View {
             case .images:
                 imagesContent
             }
+        } else if let err = viewModel.lookUpError {
+            emptyState(icon: "exclamationmark.circle", caption: err, tint: VoxTokens.Ink.subtle)
         } else {
             emptyState(icon: "text.bubble", caption: "No data available", tint: VoxTokens.Ink.faint)
         }
