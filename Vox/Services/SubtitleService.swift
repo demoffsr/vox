@@ -3,11 +3,6 @@ import AVFoundation
 
 @MainActor
 final class SubtitleService {
-    // Phase 2 kill switch — flip to false and rebuild to disable the ASR
-    // cleanup stage. See docs/apple-speech-tuning-research.md §8 and
-    // docs/superpowers/specs/2026-04-10-asr-cleanup-design.md.
-    static let enableASRCleanup = true
-
     private let audioCapture = SystemAudioCapture()
     private let transcriber = LiveTranscriber()
     private let subtitlePanel = SubtitlePanel()
@@ -29,23 +24,25 @@ final class SubtitleService {
     }
     private let session = SubtitleSessionManager()
 
-    // Translation state
+    /// Lazy `SubtitleTranslator` — one instance per session. Held here (not in
+    /// the sub-modules) so all callers share the same API-key load.
     private var translator: SubtitleTranslator?
-    private var draftTask: Task<Void, Never>?
-    private var finalTask: Task<Void, Never>?
-    /// Rolling context: last N translation pairs for multi-turn consistency
-    private var recentTranslations: [(original: String, translated: String)] = []
-    private let maxTranslationContext = 5
-    /// Cinema: accumulates text from cancelled translations so rapid dialogue gets batched
-    private var pendingFinalText: String = ""
-    private var rateLimitUntil: TimeInterval = 0
-    private var translationCount = 0
-    private var accumulatedEnglish: [String] = []
 
     private lazy var glossary: GlossaryManager = GlossaryManager(
         translatorProvider: { [weak self] in self?.ensureTranslator() },
         transcriber: transcriber
     )
+
+    private lazy var orchestrator: TranslationOrchestrator = {
+        let o = TranslationOrchestrator(
+            renderer: self,
+            ipcWriter: { [weak self] text in self?.throttledWriteIPC(text: text) },
+            translatorProvider: { [weak self] in self?.ensureTranslator() }
+        )
+        o.sessionManager = session
+        o.glossaryManager = glossary
+        return o
+    }()
 
     // Translation stream window
     private var streamViewModel: TranslationStreamViewModel?
@@ -57,7 +54,7 @@ final class SubtitleService {
         AppSettings.shared.subtitleTranslationLanguage != nil
     }
 
-    private var displayMode: SubtitleDisplayMode {
+    var displayMode: SubtitleDisplayMode {
         AppSettings.shared.subtitleDisplayMode
     }
 
@@ -81,10 +78,10 @@ final class SubtitleService {
             case .draftReady(let text):
                 // Cinema: skip drafts — only finals (pop-on, no flicker, fewer API calls)
                 if self.displayMode != .cinema {
-                    self.translateDraft(text)
+                    self.orchestrator.handleDraft(text)
                 }
             case .sentenceComplete(let text):
-                self.translateFinal(text)
+                self.orchestrator.handleFinal(text)
             }
         }
 
@@ -168,23 +165,24 @@ final class SubtitleService {
         guard isRunning else { return }
         isRunning = false
 
-        // Finalize or drop the history session before any per-session state
-        // is cleared. Keep `activeSessionID` alive until the very end so a
-        // late `processTranslation` artifact can still attach to it —
-        // `session.endSession` writes the blob but does NOT null out the ID;
-        // `session.finalizeTeardown()` does, called last below.
+        // Teardown order is deliberate — see plan Step 3.7:
+        //   1. stop audio/ASR so no new sentences arrive
+        //   2. session.endSession — writes/deletes the entry but keeps
+        //      activeSessionID alive for late post-processing callbacks
+        //   3. orchestrator.resetAll — cancels in-flight translation tasks
+        //   4. glossary.reset — cancels glossary generation + clears state
+        //   5. UI cleanup (stream panel, subtitle panel, IPC)
+        //   6. session.finalizeTeardown — NOW it's safe to null activeSessionID
+        captureTask?.cancel()
+        captureTask = nil
+        transcriber.stop()
+        await audioCapture.stopCapture()
+
         session.endSession(glossaryContent: glossary.currentGlossary?.content)
 
-        draftTask?.cancel()
-        draftTask = nil
-        finalTask?.cancel()
-        finalTask = nil
-        pendingFinalText = ""
-        translationCount = 0
-        accumulatedEnglish = []
+        orchestrator.resetAll()
         glossary.reset()
         translator = nil
-        recentTranslations = []
         sentenceBuffer.reset()
 
         streamViewModel?.isActive = false
@@ -193,18 +191,13 @@ final class SubtitleService {
         streamViewModel = nil
         streamPanel = nil
 
-        captureTask?.cancel()
-        captureTask = nil
-        transcriber.stop()
-        await audioCapture.stopCapture()
-
         subtitlePanel.fadeOut()
         writeSubtitleState(text: "", status: "stopped")
         print("[SubtitleService] Stopped")
 
         // Drop history session state last — post-processing artifacts in
-        // `processTranslation` check `activeSessionID` and we want any
-        // late-arriving callbacks to land on the correct entry.
+        // `orchestrator.processTranslation` check `activeSessionID` and we want
+        // any late-arriving callbacks to land on the correct entry.
         session.finalizeTeardown()
     }
 
@@ -231,15 +224,9 @@ final class SubtitleService {
             if streamPanel != nil {
                 streamViewModel?.selectedLanguage = language
                 streamViewModel?.clear()
-                recentTranslations = []
                 glossary.clearDetectedTopic()
-                translationCount = 0
-                accumulatedEnglish = []
+                orchestrator.resetForLanguageChange()
                 sentenceBuffer.reset()
-                draftTask?.cancel()
-                draftTask = nil
-                finalTask?.cancel()
-                finalTask = nil
                 print("[SubtitleService] Switched translation language to \(language.rawValue)")
             } else {
                 if displayMode == .lecture {
@@ -254,15 +241,8 @@ final class SubtitleService {
             streamViewModel = nil
             streamPanel = nil
             subtitlePanel.clearTranslation()
-            draftTask?.cancel()
-            draftTask = nil
-            finalTask?.cancel()
-            finalTask = nil
-            pendingFinalText = ""
+            orchestrator.resetAll()
             translator = nil
-            recentTranslations = []
-            translationCount = 0
-            accumulatedEnglish = []
             glossary.reset()
             sentenceBuffer.reset()
             print("[SubtitleService] Translation disabled")
@@ -306,7 +286,7 @@ final class SubtitleService {
 
         let panel = TranslationStreamPanel(viewModel: vm)
         panel.onCustomize = { [weak self] mode in
-            self?.processTranslation(mode: mode)
+            self?.orchestrator.processTranslation(mode: mode)
         }
         panel.onClose = { [weak self] in
             Task { @MainActor in
@@ -316,255 +296,6 @@ final class SubtitleService {
         }
         streamPanel = panel
         panel.showCentered()
-    }
-
-    // MARK: - Process (Polish / Summarize / Study Mode)
-
-    func processTranslation(mode: ProcessingMode) {
-        guard let vm = streamViewModel, !vm.accumulatedText.isEmpty else { return }
-        guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
-        guard !vm.isProcessing(mode: mode) else { return }
-
-        guard let translator = ensureTranslator() else { return }
-
-        let text = vm.accumulatedText
-        let wordCount = text.split(separator: " ").count
-        vm.setProcessing(mode, true)
-
-        Task {
-            defer { vm.setProcessing(mode, false) }
-
-            if glossary.videoTopic == nil {
-                let topicSource = accumulatedEnglish.isEmpty ? text : accumulatedEnglish.joined(separator: " ")
-                let sourceWordCount = topicSource.split(separator: " ").count
-                print("[Topic] Detecting from \(sourceWordCount) words...")
-                if let topic = await translator.detectTopic(from: topicSource) {
-                    glossary.setTopicFromPostProcessing(topic)
-                    print("[Topic] Detected: \"\(topic)\"")
-                } else {
-                    print("[Topic] FAILED: no result")
-                }
-            }
-
-            let currentTopic = glossary.videoTopic
-            let topicLog = currentTopic.map { "topic: \"\($0)\"" } ?? "no topic"
-            print("[\(mode.rawValue)] Sending \(wordCount) words to Sonnet (\(topicLog))")
-
-            let result: String?
-            switch mode {
-            case .polish:
-                result = await translator.polish(text: text, topic: currentTopic, glossary: glossary.currentGlossary, language: targetLang)
-            case .summarize:
-                result = await translator.summarize(text: text, topic: currentTopic, language: targetLang)
-            case .studyMode:
-                result = await translator.studyNotes(text: text, topic: currentTopic, language: targetLang)
-            }
-
-            if let result {
-                let resultWordCount = result.split(separator: " ").count
-                print("[\(mode.rawValue)] Done: \(resultWordCount) words returned")
-                vm.setTabContent(mode.targetTab, text: result)
-                vm.activeTab = mode.targetTab
-
-                // Attach the artifact to the current history session.
-                // `session.activeSessionID` stays alive until stop() finishes
-                // (two-phase teardown), so late-arriving post-processing calls
-                // still land correctly.
-                let artifactKind: ArtifactKind = {
-                    switch mode {
-                    case .polish:    return .polish
-                    case .summarize: return .summary
-                    case .studyMode: return .studyNotes
-                    }
-                }()
-                session.attachArtifact(
-                    kind: artifactKind,
-                    content: result,
-                    model: ClaudeModel.sonnet.rawValue
-                )
-            } else {
-                print("[\(mode.rawValue)] FAILED: no result")
-            }
-        }
-    }
-
-    // MARK: - Draft Translation (Haiku, fast)
-
-    private func translateDraft(_ text: String) {
-        guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
-        let now = Date().timeIntervalSince1970
-        if now < rateLimitUntil { return }
-
-        guard text.split(separator: " ").count >= 3 else { return }
-
-        draftTask?.cancel()
-
-        guard let translator = ensureTranslator() else { return }
-
-        let prevTurns = recentTranslations
-        let currentTopic = glossary.videoTopic
-        let glossarySnapshot = glossary.currentGlossary
-
-        print("[Draft] EN: \"\(text)\"")
-
-        draftTask = Task {
-            do {
-                let result = try await translator.translateStreaming(
-                    text: text,
-                    language: targetLang,
-                    model: .haiku,
-                    previousTurns: prevTurns,
-                    topic: currentTopic,
-                    glossary: glossarySnapshot,
-                    onToken: { _ in }
-                )
-                guard !Task.isCancelled else { return }
-                guard !result.isEmpty else { return }
-                print("[Draft] \(targetLang.rawValue): \"\(result)\"")
-                switch self.displayMode {
-                case .lecture:
-                    self.streamViewModel?.updateDraft(result)
-                case .cinema:
-                    self.subtitlePanel.showTranslation(result)
-                }
-                self.throttledWriteIPC(text: result)
-            } catch {
-                if case ClaudeAPIService.APIError.rateLimited = error {
-                    self.rateLimitUntil = Date().timeIntervalSince1970 + 30
-                    print("[Draft] RATE LIMITED — 30s")
-                } else if !(error is CancellationError) && (error as? URLError)?.code != .cancelled {
-                    print("[Draft] FAILED: \(error)")
-                }
-            }
-        }
-    }
-
-    // MARK: - Final Translation (Sonnet for lecture, Haiku for cinema)
-
-    private func translateFinal(_ text: String) {
-        guard let targetLang = AppSettings.shared.subtitleTranslationLanguage else { return }
-        let now = Date().timeIntervalSince1970
-        if now < rateLimitUntil { return }
-
-        guard text.split(separator: " ").count >= 2 else { return }
-
-        draftTask?.cancel()
-
-        let isCinema = displayMode == .cinema
-
-        if isCinema && finalTask != nil {
-            // Cinema: translation in-flight — queue, don't cancel
-            pendingFinalText = pendingFinalText.isEmpty ? text : pendingFinalText + " " + text
-            print("[Final] Queued: \"\(text)\"")
-            return
-        }
-
-        // Include any queued text from rapid dialogue
-        let textToTranslate: String
-        if isCinema && !pendingFinalText.isEmpty {
-            textToTranslate = pendingFinalText + " " + text
-            pendingFinalText = ""
-        } else {
-            textToTranslate = text
-        }
-
-        startFinalTranslation(textToTranslate, targetLang: targetLang, isCinema: isCinema)
-    }
-
-    private func startFinalTranslation(_ text: String, targetLang: TargetLanguage, isCinema: Bool) {
-        guard let translator = ensureTranslator() else { return }
-
-        let prevTurns = recentTranslations
-        let currentTopic = glossary.videoTopic
-        let glossarySnapshot = glossary.currentGlossary
-
-        print("[Final] EN: \"\(text)\" (context: \(prevTurns.count) turns)")
-
-        finalTask = Task {
-            defer { self.finalTask = nil }
-            do {
-                // Phase 2: ASR cleanup stage. Runs only when a glossary is
-                // available for this session (cinema-only in practice; lecture
-                // mode never generates a glossary). Any failure inside
-                // correctASRTerms returns the original text — cancellation
-                // rethrows so the outer catch handles it.
-                var textToTranslate = text
-                if Self.enableASRCleanup, let glossarySnapshot {
-                    textToTranslate = try await translator.correctASRTerms(
-                        text: text, glossary: glossarySnapshot, topic: currentTopic
-                    )
-                }
-
-                let finalModel: ClaudeModel = isCinema ? .haiku : .sonnet
-                let result = try await translator.translateStreaming(
-                    text: textToTranslate,
-                    language: targetLang,
-                    model: finalModel,
-                    previousTurns: prevTurns,
-                    topic: currentTopic,
-                    glossary: glossarySnapshot,
-                    cinemaMode: isCinema,
-                    onToken: { _ in }
-                )
-                guard !Task.isCancelled else { return }
-                guard !result.isEmpty else { return }
-                print("[Final] \(targetLang.rawValue): \"\(result)\"")
-
-                self.recentTranslations.append((original: textToTranslate, translated: result))
-                if self.recentTranslations.count > self.maxTranslationContext {
-                    self.recentTranslations.removeFirst()
-                }
-
-                // Persist the pair to history (works for both lecture and cinema).
-                self.session.appendPair(source: textToTranslate, translated: result)
-                switch self.displayMode {
-                case .lecture:
-                    self.streamViewModel?.commitFinal(result)
-                case .cinema:
-                    self.subtitlePanel.showTranslation(result)
-                }
-
-                self.accumulatedEnglish.append(text)
-                self.translationCount += 1
-                let detectAfter = isCinema ? 5 : 3
-                if self.translationCount == detectAfter, self.glossary.videoTopic == nil {
-                    let combined = self.accumulatedEnglish.joined(separator: " ")
-                    Task {
-                        if isCinema, let targetLang = AppSettings.shared.subtitleTranslationLanguage {
-                            // Single call: detect topic + generate glossary
-                            if let detected = await translator.detectTopicWithGlossary(
-                                from: combined, targetLanguage: targetLang
-                            ) {
-                                print("[Topic+Glossary] \"\(detected.topic)\", \(detected.glossary.content.count) chars")
-                                self.glossary.applyAutoDetectedTopic(detected.topic, glossary: detected.glossary)
-                            }
-                        } else {
-                            // Lecture: topic only
-                            if let topic = await translator.detectTopic(from: combined) {
-                                print("[Topic] Detected: \"\(topic)\"")
-                                self.glossary.applyAutoDetectedTopic(topic, glossary: nil)
-                            }
-                        }
-                    }
-                }
-
-                self.throttledWriteIPC(text: result)
-
-                // Cinema: process any queued dialogue that arrived during translation
-                if isCinema && !self.pendingFinalText.isEmpty {
-                    let queued = self.pendingFinalText
-                    self.pendingFinalText = ""
-                    self.startFinalTranslation(queued, targetLang: targetLang, isCinema: true)
-                }
-            } catch {
-                if case ClaudeAPIService.APIError.rateLimited = error {
-                    self.rateLimitUntil = Date().timeIntervalSince1970 + 30
-                    print("[Final] RATE LIMITED — 30s")
-                } else if !(error is CancellationError) && (error as? URLError)?.code != .cancelled {
-                    print("[Final] FAILED: \(error)")
-                }
-            }
-        }
     }
 
     // MARK: - IPC
@@ -586,5 +317,47 @@ final class SubtitleService {
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         try? data.write(to: ipcFile, options: .atomic)
+    }
+}
+
+// MARK: - TranslationRendering
+
+/// `SubtitleService` is the single rendering surface for both modes. Lecture
+/// routes through `TranslationStreamViewModel`; cinema goes straight to
+/// `SubtitlePanel`. `accumulatedSourceText` is only meaningful in lecture
+/// (cinema has no stream view model to aggregate source text into).
+extension SubtitleService: TranslationRendering {
+    func showDraft(_ text: String) {
+        switch displayMode {
+        case .lecture: streamViewModel?.updateDraft(text)
+        case .cinema:  subtitlePanel.showTranslation(text)
+        }
+    }
+
+    func showFinal(_ text: String) {
+        switch displayMode {
+        case .lecture: streamViewModel?.commitFinal(text)
+        case .cinema:  subtitlePanel.showTranslation(text)
+        }
+    }
+
+    var accumulatedSourceText: String? {
+        streamViewModel?.accumulatedText
+    }
+
+    func setProcessing(_ mode: ProcessingMode, _ active: Bool) {
+        streamViewModel?.setProcessing(mode, active)
+    }
+
+    func isProcessing(_ mode: ProcessingMode) -> Bool {
+        streamViewModel?.isProcessing(mode: mode) ?? false
+    }
+
+    func setTab(_ tab: StreamTab, text: String) {
+        streamViewModel?.setTabContent(tab, text: text)
+    }
+
+    func setActiveTab(_ tab: StreamTab) {
+        streamViewModel?.activeTab = tab
     }
 }
