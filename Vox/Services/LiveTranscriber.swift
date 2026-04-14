@@ -78,8 +78,14 @@ final class LiveTranscriber: @unchecked Sendable {
     private var isSilent: Bool = false
     private var silenceFired: Bool = false  // prevent re-firing until speech resumes
 
-    /// Cinema mode: tighter bandpass + higher speech gate for noisy content (series, movies)
-    var cinemaMode: Bool = false
+    /// Cinema mode: tighter bandpass + higher speech gate for noisy content (series, movies).
+    /// Reads/writes go through the shared lock so toggling mid-session can't race with
+    /// audio processing (which reads `_cinemaMode` directly while already holding the lock).
+    private var _cinemaMode: Bool = false
+    var cinemaMode: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _cinemaMode }
+        set { lock.lock(); defer { lock.unlock() }; _cinemaMode = newValue }
+    }
 
     // MARK: - Public API
 
@@ -263,10 +269,13 @@ final class LiveTranscriber: @unchecked Sendable {
             return
         }
 
-        // Fast path: format matches, no conversion needed
+        // Fast path: format matches, no conversion needed.
+        // preprocessAudio mutates filter/silence state — must run under the lock.
+        // onSilence is fired AFTER releasing the lock (never invoke user closures under a lock).
         if buffer.format == targetFormat {
+            let silenceMs = preprocessAudio(buffer)
             lock.unlock()
-            preprocessAudio(buffer)
+            if let silenceMs { onSilence?(silenceMs) }
             continuation.yield(AnalyzerInput(buffer: buffer))
             return
         }
@@ -305,7 +314,17 @@ final class LiveTranscriber: @unchecked Sendable {
         }
 
         if error == nil && outputBuffer.frameLength > 0 {
-            preprocessAudio(outputBuffer)
+            lock.lock()
+            // Re-check: stop() or stop()+start() could have run while the lock was
+            // released for conversion. _isRunning covers stop; _targetFormat == targetFormat
+            // covers stop+start with a different format (AVAudioFormat == is value equality).
+            guard _isRunning, _targetFormat == targetFormat else {
+                lock.unlock()
+                return
+            }
+            let silenceMs = preprocessAudio(outputBuffer)
+            lock.unlock()
+            if let silenceMs { onSilence?(silenceMs) }
             continuation.yield(AnalyzerInput(buffer: outputBuffer))
         }
     }
@@ -419,10 +438,15 @@ final class LiveTranscriber: @unchecked Sendable {
 
     /// Band-pass filter + pre-emphasis + noise gate + RMS normalization
     /// to improve speech recognition quality.
-    private func preprocessAudio(_ buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData else { return }
+    ///
+    /// MUST be called with `lock` held — mutates filter coefficients, IIR taps,
+    /// pre-emphasis state, and silence tracking. Returns the silence-elapsed
+    /// duration (ms) when a silence event should fire; caller invokes `onSilence`
+    /// after releasing the lock (never call a user closure under NSLock).
+    private func preprocessAudio(_ buffer: AVAudioPCMBuffer) -> Int? {
+        guard let channelData = buffer.floatChannelData else { return nil }
         let count = Int(buffer.frameLength)
-        guard count > 0 else { return }
+        guard count > 0 else { return nil }
 
         let samples = channelData[0]
 
@@ -434,7 +458,7 @@ final class LiveTranscriber: @unchecked Sendable {
         var rms: Float = 0
         vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
 
-        let isSpeech = rms > (cinemaMode ? 0.01 : 0.005)
+        let isSpeech = rms > (_cinemaMode ? 0.01 : 0.005)
 
         if isSpeech {
             // Speech resumed — reset silence tracking
@@ -443,6 +467,7 @@ final class LiveTranscriber: @unchecked Sendable {
                 silenceFired = false
             }
             applyRMSNormalization(samples, count: count)
+            return nil
         } else {
             // Silence detected
             let now = Date().timeIntervalSince1970
@@ -453,18 +478,18 @@ final class LiveTranscriber: @unchecked Sendable {
                 let elapsed = Int((now - silenceStartTime) * 1000)
                 if elapsed >= 700 {
                     silenceFired = true
-                    onSilence?(elapsed)
+                    return elapsed
                 }
             }
-            // Don't normalize silence — original gate behavior: return without processing
-            return
+            // Don't normalize silence — original gate behavior: skip normalization.
+            return nil
         }
     }
 
     /// Butterworth 2nd-order high-pass — removes sub-bass that interferes with recognition.
     /// Lecture: 80 Hz (standard). Cinema: 200 Hz (aggressive — cuts explosions, bass music).
     private func applyHighPassFilter(_ samples: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
-        let cutoff = cinemaMode ? 200.0 : 80.0
+        let cutoff = _cinemaMode ? 200.0 : 80.0
         if sampleRate != hpConfiguredRate {
             let omega = 2.0 * .pi * cutoff / sampleRate
             let cosW = cos(omega)
@@ -492,7 +517,7 @@ final class LiveTranscriber: @unchecked Sendable {
     /// Butterworth 2nd-order low-pass — removes high-frequency noise that confuses the recognizer.
     /// Lecture: 8 kHz (standard). Cinema: 5 kHz (aggressive — cuts cymbals, hiss, sound effects).
     private func applyLowPassFilter(_ samples: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
-        let cutoff = cinemaMode ? 5000.0 : 8000.0
+        let cutoff = _cinemaMode ? 5000.0 : 8000.0
         if sampleRate != lpConfiguredRate {
             let omega = 2.0 * .pi * cutoff / sampleRate
             let cosW = cos(omega)
