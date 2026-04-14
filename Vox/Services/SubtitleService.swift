@@ -58,9 +58,9 @@ final class SubtitleService {
         AppSettings.shared.subtitleDisplayMode
     }
 
-    /// Lazy factory shared by the coordinator, `GlossaryManager`, and (in Step 3)
-    /// `TranslationOrchestrator`. Ensures exactly one `SubtitleTranslator` per
-    /// session and exactly one Keychain read.
+    /// Lazy factory shared by the coordinator, `GlossaryManager`, and
+    /// `TranslationOrchestrator`. Ensures exactly one `SubtitleTranslator`
+    /// per session and exactly one Keychain read.
     private func ensureTranslator() -> SubtitleTranslator? {
         if let translator { return translator }
         guard let apiKey = try? KeychainHelper().load(), !apiKey.isEmpty else { return nil }
@@ -135,9 +135,10 @@ final class SubtitleService {
 
         isRunning = true
 
-        // Create a history entry for this session. We write pairs as they
-        // arrive in translateFinal's success branch; the transcript blob
-        // is flushed periodically and finalized in stop().
+        // Create a history entry for this session. Pairs are appended as they
+        // arrive in `TranslationOrchestrator`'s final-translation success branch;
+        // the transcript blob is flushed periodically by the session manager
+        // and finalized in stop().
         let kind: HistoryKind = (displayMode == .cinema) ? .cinemaSession : .lectureSession
         session.beginSession(
             kind: kind,
