@@ -42,9 +42,14 @@ final class GlossaryManager {
         generationTask?.cancel()
         generationTask = Task {
             print("[Glossary] Generating for \"\(showName)\" (user: \(isUserProvided))...")
-            if let glossary = await translator.generateGlossary(
+            let generated = await translator.generateGlossary(
                 showName: showName, targetLanguage: targetLang, isUserProvided: isUserProvided
-            ) {
+            )
+            // Check cancellation AFTER the await — a language switch (or stop)
+            // may have fired while we were in flight, and writing a stale
+            // glossary would mislabel terms for the wrong target language.
+            guard !Task.isCancelled else { return }
+            if let glossary = generated {
                 self.currentGlossary = glossary
                 let termLines = glossary.content.components(separatedBy: "\n")
                     .filter { $0.contains("→") || $0.contains("—") }
@@ -91,8 +96,12 @@ final class GlossaryManager {
 
     /// Softer reset for the same-language-change path: clear only the glossary
     /// so it gets regenerated for the new target language. Topic and user
-    /// show name survive.
+    /// show name survive. Cancels any in-flight generation — otherwise a task
+    /// started for the old language could land after the new one and overwrite
+    /// `currentGlossary` with translations for the wrong target.
     func resetForLanguageChange() {
+        generationTask?.cancel()
+        generationTask = nil
         currentGlossary = nil
     }
 

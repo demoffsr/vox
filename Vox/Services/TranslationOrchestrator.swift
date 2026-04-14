@@ -162,7 +162,12 @@ final class TranslationOrchestrator {
         print("[Final] EN: \"\(text)\" (context: \(prevTurns.count) turns)")
 
         finalTask = Task {
-            defer { self.finalTask = nil }
+            // NOTE: `finalTask` is NOT cleared via `defer` — in cinema mode the
+            // recursive drain at the end of the success path calls
+            // `startFinalTranslation(queued, ...)`, which installs a fresh task
+            // in `self.finalTask`. A deferred nil would stomp it and the queued
+            // dialogue would be lost. Instead, we clear the slot explicitly on
+            // every terminal path that does NOT recurse.
             do {
                 // Phase 2: ASR cleanup stage. Runs only when a glossary is
                 // available for this session (cinema-only in practice; lecture
@@ -187,8 +192,8 @@ final class TranslationOrchestrator {
                     cinemaMode: isCinema,
                     onToken: { _ in }
                 )
-                guard !Task.isCancelled else { return }
-                guard !result.isEmpty else { return }
+                guard !Task.isCancelled else { self.finalTask = nil; return }
+                guard !result.isEmpty else { self.finalTask = nil; return }
                 print("[Final] \(targetLang.rawValue): \"\(result)\"")
 
                 self.recentTranslations.append((original: textToTranslate, translated: result))
@@ -230,9 +235,16 @@ final class TranslationOrchestrator {
                 if isCinema && !self.pendingFinalText.isEmpty {
                     let queued = self.pendingFinalText
                     self.pendingFinalText = ""
+                    // Do NOT clear finalTask here — startFinalTranslation will
+                    // assign the new task to `self.finalTask` atomically on the
+                    // MainActor. Clearing first would let a parallel handleFinal
+                    // see `finalTask == nil` and spawn a second translation.
                     self.startFinalTranslation(queued, targetLang: targetLang, isCinema: true)
+                    return
                 }
+                self.finalTask = nil
             } catch {
+                self.finalTask = nil
                 if case ClaudeAPIService.APIError.rateLimited = error {
                     self.rateLimitUntil = Date().timeIntervalSince1970 + 30
                     print("[Final] RATE LIMITED — 30s")
