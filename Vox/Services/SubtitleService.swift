@@ -24,11 +24,10 @@ final class SubtitleService {
     private var lastWrittenText: String = ""
 
     // History persistence (injected by AppDelegate).
-    weak var historyStore: HistoryStore?
-    private var activeSessionID: UUID?
-    private var sessionStartTime: Date?
-    private var sessionHadTranslation: Bool = false
-    private var autosaveTask: Task<Void, Never>?
+    weak var historyStore: HistoryStore? {
+        didSet { session.historyStore = historyStore }
+    }
+    private let session = SubtitleSessionManager()
 
     // Translation state
     private var translator: SubtitleTranslator?
@@ -131,27 +130,13 @@ final class SubtitleService {
         // Create a history entry for this session. We write pairs as they
         // arrive in translateFinal's success branch; the transcript blob
         // is flushed periodically and finalized in stop().
-        if let store = historyStore {
-            let kind: HistoryKind = (displayMode == .cinema) ? .cinemaSession : .lectureSession
-            let id = store.createSession(
-                kind: kind,
-                targetLang: (AppSettings.shared.subtitleTranslationLanguage?.rawValue) ?? "",
-                model: (displayMode == .cinema ? ClaudeModel.haiku : ClaudeModel.sonnet).rawValue,
-                showName: userProvidedShowName
-            )
-            activeSessionID = id
-            sessionStartTime = .now
-            sessionHadTranslation = false
-
-            autosaveTask = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(15))
-                    guard let self else { return }
-                    guard let sid = self.activeSessionID else { return }
-                    self.historyStore?.flushSession(sessionID: sid)
-                }
-            }
-        }
+        let kind: HistoryKind = (displayMode == .cinema) ? .cinemaSession : .lectureSession
+        session.beginSession(
+            kind: kind,
+            targetLang: (AppSettings.shared.subtitleTranslationLanguage?.rawValue) ?? "",
+            model: (displayMode == .cinema ? ClaudeModel.haiku : ClaudeModel.sonnet).rawValue,
+            showName: userProvidedShowName
+        )
 
         if initialTranslationActive && displayMode == .lecture {
             openTranslationStream()
@@ -174,21 +159,10 @@ final class SubtitleService {
 
         // Finalize or drop the history session before any per-session state
         // is cleared. Keep `activeSessionID` alive until the very end so a
-        // late `processTranslation` artifact can still attach to it.
-        autosaveTask?.cancel()
-        autosaveTask = nil
-        if let sid = activeSessionID, let store = historyStore {
-            if sessionHadTranslation {
-                store.finishSession(sessionID: sid, glossary: currentGlossary?.content)
-                Task { [weak store] in
-                    await store?.generateTitleIfNeeded(entryID: sid)
-                }
-            } else {
-                // No successful translation happened — don't pollute history
-                // with an empty ASR-only run.
-                store.delete(entryID: sid)
-            }
-        }
+        // late `processTranslation` artifact can still attach to it —
+        // `session.endSession` writes the blob but does NOT null out the ID;
+        // `session.finalizeTeardown()` does, called last below.
+        session.endSession(glossaryContent: currentGlossary?.content)
 
         draftTask?.cancel()
         draftTask = nil
@@ -223,9 +197,7 @@ final class SubtitleService {
         // Drop history session state last — post-processing artifacts in
         // `processTranslation` check `activeSessionID` and we want any
         // late-arriving callbacks to land on the correct entry.
-        activeSessionID = nil
-        sessionStartTime = nil
-        sessionHadTranslation = false
+        session.finalizeTeardown()
         userProvidedShowName = nil
     }
 
@@ -426,23 +398,21 @@ final class SubtitleService {
                 vm.activeTab = mode.targetTab
 
                 // Attach the artifact to the current history session.
-                // `activeSessionID` stays alive until stop() finishes, so
-                // late-arriving post-processing calls still land correctly.
-                if let sid = activeSessionID {
-                    let artifactKind: ArtifactKind = {
-                        switch mode {
-                        case .polish:    return .polish
-                        case .summarize: return .summary
-                        case .studyMode: return .studyNotes
-                        }
-                    }()
-                    historyStore?.attachArtifact(
-                        sessionID: sid,
-                        kind: artifactKind,
-                        content: result,
-                        model: ClaudeModel.sonnet.rawValue
-                    )
-                }
+                // `session.activeSessionID` stays alive until stop() finishes
+                // (two-phase teardown), so late-arriving post-processing calls
+                // still land correctly.
+                let artifactKind: ArtifactKind = {
+                    switch mode {
+                    case .polish:    return .polish
+                    case .summarize: return .summary
+                    case .studyMode: return .studyNotes
+                    }
+                }()
+                session.attachArtifact(
+                    kind: artifactKind,
+                    content: result,
+                    model: ClaudeModel.sonnet.rawValue
+                )
             } else {
                 print("[\(mode.rawValue)] FAILED: no result")
             }
@@ -585,14 +555,7 @@ final class SubtitleService {
                 }
 
                 // Persist the pair to history (works for both lecture and cinema).
-                if let sid = self.activeSessionID {
-                    self.historyStore?.appendLine(
-                        sessionID: sid,
-                        source: textToTranslate,
-                        translated: result
-                    )
-                    self.sessionHadTranslation = true
-                }
+                self.session.appendPair(source: textToTranslate, translated: result)
                 switch self.displayMode {
                 case .lecture:
                     self.streamViewModel?.commitFinal(result)
